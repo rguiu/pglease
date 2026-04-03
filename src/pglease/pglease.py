@@ -34,14 +34,26 @@ class PGLease:
         backend: Union[Backend, str],
         owner_id: Optional[str] = None,
         heartbeat_interval: int = 10,
+        on_lease_lost: Optional[Callable[[str], None]] = None,
     ):
         """
         Initialize coordinator.
-        
+
         Args:
             backend: Backend instance or PostgreSQL connection string
             owner_id: Unique identifier for this worker (auto-generated if None)
             heartbeat_interval: Seconds between heartbeats (default: 10)
+            on_lease_lost: Optional callback invoked with the task name when
+                a background heartbeat thread exits due to failure.  Use this
+                to cancel in-flight work, raise an alert, or update metrics.
+                The callback runs on the heartbeat thread — keep it short and
+                thread-safe.  Example::
+
+                    def handle_lost(task_name):
+                        logging.critical("Lost lease: %s — aborting!", task_name)
+                        os.abort()
+
+                    pglease = PGLease(url, on_lease_lost=handle_lost)
         """
         # Initialize backend
         if isinstance(backend, str):
@@ -51,13 +63,16 @@ class PGLease:
         
         # Generate owner ID if not provided
         self.owner_id = owner_id or self._generate_owner_id()
-        
+
+        # User-supplied callback for lease-loss events
+        self._on_lease_lost = on_lease_lost
+
         # Initialize heartbeat manager
         self.heartbeat_manager = HeartbeatManager(
             self.backend,
             interval=heartbeat_interval,
         )
-        
+
         # Track active leases for cleanup
         self._active_leases: set[str] = set()
         
@@ -93,8 +108,16 @@ class PGLease:
         
         if result.success:
             self._active_leases.add(task_name)
-            # Start heartbeat to keep lease alive
-            self.heartbeat_manager.start(task_name, self.owner_id, ttl)
+            # Start heartbeat to keep lease alive.
+            # The internal callback removes the task from _active_leases so
+            # that close() does not attempt to release an already-lost lease,
+            # then forwards to any user-supplied on_lease_lost handler.
+            def _on_lost(lost_task: str) -> None:
+                self._active_leases.discard(lost_task)
+                if self._on_lease_lost is not None:
+                    self._on_lease_lost(lost_task)
+
+            self.heartbeat_manager.start(task_name, self.owner_id, ttl, on_lease_lost=_on_lost)
             logger.info(f"Acquired lease for {task_name}")
             return True
         
