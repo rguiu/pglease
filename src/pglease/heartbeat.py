@@ -106,7 +106,12 @@ class HeartbeatManager:
         # Join outside the lock so on_lease_lost callbacks are free to
         # call back into the coordinator without deadlocking.
         if thread and thread.is_alive():
-            thread.join(timeout=1.0)
+            thread.join(timeout=30.0)
+            if thread.is_alive():
+                logger.warning(
+                    f"Heartbeat thread for {task_name} did not exit within "
+                    "30 s; it may still be blocked on a database operation."
+                )
 
         # Clean up after the thread has finished (or timed out).
         with self._lock:
