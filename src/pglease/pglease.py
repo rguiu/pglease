@@ -124,23 +124,31 @@ class PGLease:
         logger.debug(f"Failed to acquire lease for {task_name}: {result.reason}")
         return False
     
-    def acquire(self, task_name: str, ttl: int = 60, wait: bool = False) -> "LeaseContext":
+    def acquire(self, task_name: str, ttl: int = 60, raise_on_failure: bool = False) -> "LeaseContext":
         """
         Acquire a lease and return a context manager.
         
         Args:
             task_name: Unique identifier for the task
             ttl: Time-to-live in seconds for the lease
-            wait: If True, raise error on failure; if False, silently skip
+            raise_on_failure: If True, raise AcquisitionError when the lease
+                cannot be acquired.  If False (default), the context manager
+                simply enters with ``acquired=False`` and the body is skipped
+                when used with ``if acquired:``.
             
         Returns:
             Context manager for the lease
             
         Example:
-            with coordinator.acquire("my-task", ttl=60):
-                perform_task()  # Only runs if lease acquired
+            with coordinator.acquire("my-task", ttl=60) as acquired:
+                if acquired:
+                    perform_task()
+
+            # Raise on failure instead of silently skipping:
+            with coordinator.acquire("my-task", raise_on_failure=True):
+                perform_task()  # only runs if lease was acquired
         """
-        return LeaseContext(self, task_name, ttl, wait)
+        return LeaseContext(self, task_name, ttl, raise_on_failure)
     
     def release(self, task_name: str) -> bool:
         """
@@ -267,19 +275,19 @@ class LeaseContext:
         coordinator: PGLease,
         task_name: str,
         ttl: int,
-        wait: bool,
+        raise_on_failure: bool,
     ):
         self.coordinator = coordinator
         self.task_name = task_name
         self.ttl = ttl
-        self.wait = wait
+        self.raise_on_failure = raise_on_failure
         self.acquired = False
     
     def __enter__(self) -> bool:
         """Acquire lease when entering context."""
         self.acquired = self.coordinator.try_acquire(self.task_name, self.ttl)
         
-        if not self.acquired and self.wait:
+        if not self.acquired and self.raise_on_failure:
             raise AcquisitionError(f"Failed to acquire lease for {self.task_name}")
         
         return self.acquired
