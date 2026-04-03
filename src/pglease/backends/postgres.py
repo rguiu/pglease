@@ -44,15 +44,23 @@ class PostgresBackend(Backend):
     
     TABLE_NAME = "pglease_leases"
     
-    def __init__(self, connection_string: str, auto_initialize: bool = True):
+    def __init__(
+        self,
+        connection_string: str,
+        auto_initialize: bool = True,
+        connect_timeout: int = 10,
+    ):
         """
         Initialize PostgreSQL backend.
         
         Args:
             connection_string: PostgreSQL connection string
             auto_initialize: Automatically create table if needed
+            connect_timeout: Seconds to wait for a connection before raising
+                an error (default 10).  Set to 0 to disable the timeout.
         """
         self.connection_string = connection_string
+        self.connect_timeout = connect_timeout
         self._conn: Optional[psycopg2.extensions.connection] = None
         self._lock = threading.Lock()  # guards self._conn across threads
 
@@ -121,10 +129,10 @@ class PostgresBackend(Backend):
     def _get_connection(self) -> psycopg2.extensions.connection:
         """Get or create database connection."""
         if self._conn is None or self._conn.closed:
-            self._conn = psycopg2.connect(
-                self.connection_string,
-                cursor_factory=RealDictCursor
-            )
+            kwargs = {"cursor_factory": RealDictCursor}
+            if self.connect_timeout:
+                kwargs["connect_timeout"] = self.connect_timeout
+            self._conn = psycopg2.connect(self.connection_string, **kwargs)
             # Set reasonable defaults
             self._conn.autocommit = False
         return self._conn
