@@ -79,10 +79,12 @@ class HybridPostgresBackend(PostgresBackend):
         lock_id = self._task_to_lock_id(task_name)
         
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
-                result = cur.fetchone()[0]
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
+                    result = cur.fetchone()[0]
+                conn.commit()
             
             if result:
                 self._held_locks[task_name] = lock_id
@@ -106,10 +108,12 @@ class HybridPostgresBackend(PostgresBackend):
             return False
         
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
-                result = cur.fetchone()[0]
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
+                    result = cur.fetchone()[0]
+                conn.commit()
             
             if result:
                 del self._held_locks[task_name]
@@ -139,16 +143,18 @@ class HybridPostgresBackend(PostgresBackend):
             # (unsigned 32-bit).  Querying only objid = %s is wrong for any
             # lock_id whose upper 32 bits are non-zero.  Reconstruct the full
             # 64-bit key for comparison instead.
-            conn = self._get_connection()
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT COUNT(*) > 0
-                    FROM pg_locks
-                    WHERE locktype = 'advisory'
-                      AND (classid::bigint << 32) | objid::bigint = %s
-                      AND pid = pg_backend_pid()
-                """, (lock_id,))
-                result = cur.fetchone()[0]
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT COUNT(*) > 0
+                        FROM pg_locks
+                        WHERE locktype = 'advisory'
+                          AND (classid::bigint << 32) | objid::bigint = %s
+                          AND pid = pg_backend_pid()
+                    """, (lock_id,))
+                    result = cur.fetchone()[0]
+                conn.commit()
             
             return result
         
