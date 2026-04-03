@@ -5,6 +5,8 @@ import threading
 from datetime import datetime, timedelta
 from typing import Optional
 
+import re
+
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
@@ -14,6 +16,22 @@ from ..exceptions import BackendError
 from ..models import Lease, AcquisitionResult
 
 logger = logging.getLogger(__name__)
+
+
+def _scrub_exc(exc: Exception) -> str:
+    """Return str(exc) with any embedded credentials redacted.
+
+    psycopg2 errors often embed the full DSN (host/password) in their
+    message text.  This helper strips:
+    - URL passwords:   postgresql://user:SECRET@host  →  postgresql://user:***@host
+    - keyword values:  password=SECRET                →  password=***
+    """
+    msg = str(exc)
+    # URL form: scheme://user:password@
+    msg = re.sub(r'(://[^:@/]+:)[^@/]+((?:@|//))', r'\1***\2', msg)
+    # Key=value form: password=<token>
+    msg = re.sub(r'(?i)(password\s*=\s*)\S+', r'\1***', msg)
+    return msg
 
 
 class PostgresBackend(Backend):
@@ -125,7 +143,7 @@ class PostgresBackend(Backend):
             with self._lock:
                 if self._conn:
                     self._conn.rollback()
-            raise BackendError(f"Failed to initialize backend: {e}") from e
+            raise BackendError(f"Failed to initialize backend: {_scrub_exc(e)}") from e
     
     def acquire(self, task_name: str, owner_id: str, ttl: int) -> AcquisitionResult:
         """
@@ -231,7 +249,7 @@ class PostgresBackend(Backend):
             with self._lock:
                 if self._conn:
                     self._conn.rollback()
-            raise BackendError(f"Failed to acquire lease: {e}") from e
+            raise BackendError(f"Failed to acquire lease: {_scrub_exc(e)}") from e
     
     def release(self, task_name: str, owner_id: str) -> bool:
         """
@@ -258,7 +276,7 @@ class PostgresBackend(Backend):
             with self._lock:
                 if self._conn:
                     self._conn.rollback()
-            raise BackendError(f"Failed to release lease: {e}") from e
+            raise BackendError(f"Failed to release lease: {_scrub_exc(e)}") from e
     
     def heartbeat(self, task_name: str, owner_id: str, ttl: int) -> bool:
         """
@@ -290,7 +308,7 @@ class PostgresBackend(Backend):
             with self._lock:
                 if self._conn:
                     self._conn.rollback()
-            raise BackendError(f"Failed to send heartbeat: {e}") from e
+            raise BackendError(f"Failed to send heartbeat: {_scrub_exc(e)}") from e
     
     def get_lease(self, task_name: str) -> Optional[Lease]:
         """Get the current lease for a task."""
@@ -313,7 +331,7 @@ class PostgresBackend(Backend):
             )
 
         except Exception as e:
-            raise BackendError(f"Failed to get lease: {e}") from e
+            raise BackendError(f"Failed to get lease: {_scrub_exc(e)}") from e
     
     def close(self) -> None:
         """Close database connection."""
