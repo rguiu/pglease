@@ -5,6 +5,7 @@ A lightweight coordination library for singleton task execution across distribut
 """
 
 from .pglease import PGLease
+from .async_pglease import AsyncPGLease
 from .exceptions import (
     PgleaseError,
     AcquisitionError,
@@ -18,6 +19,7 @@ from .backends import PostgresBackend, HybridPostgresBackend
 __version__ = "0.1.0"
 __all__ = [
     "PGLease",
+    "AsyncPGLease",
     "Lease",
     "AcquisitionResult",
     "PgleaseError",
