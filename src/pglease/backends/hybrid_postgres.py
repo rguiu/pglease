@@ -6,6 +6,7 @@ Combines the benefits of both approaches:
 - Lease table for observability, metadata, and TTL safety net
 """
 
+import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
@@ -55,11 +56,14 @@ class HybridPostgresBackend(PostgresBackend):
         """
         Convert task name to PostgreSQL advisory lock ID.
         
-        Uses hash to generate consistent 64-bit integer for the task.
+        Uses a deterministic SHA-256 hash to generate a consistent 64-bit integer
+        for the task name across all processes and interpreter restarts.
         """
-        # PostgreSQL advisory locks use bigint (64-bit signed)
-        # Python hash() can return values outside this range, so we mod it
-        return hash(task_name) % (2**63)
+        # Use hashlib.sha256 for deterministic cross-process hashing.
+        # Python's built-in hash() is randomised per-process (PYTHONHASHSEED)
+        # and must NOT be used here.
+        digest = hashlib.sha256(task_name.encode()).digest()
+        return int.from_bytes(digest[:8], "big") & ((2**63) - 1)
     
     def _try_advisory_lock(self, task_name: str) -> bool:
         """

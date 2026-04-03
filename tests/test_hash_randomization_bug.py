@@ -1,13 +1,14 @@
 """
-Integration test demonstrating the hash randomization bug in HybridPostgresBackend.
+Tests verifying that HybridPostgresBackend._task_to_lock_id() is deterministic
+across processes (fix for REPORT.md issue #1).
 
-BUG: _task_to_lock_id() uses Python's hash(), which is randomized per process
-(PYTHONHASHSEED). This means different workers/pods compute different advisory
-lock IDs for the same task name, completely breaking mutual exclusion.
+FIX: _task_to_lock_id() was changed from Python's hash() (randomised per process
+via PYTHONHASHSEED) to hashlib.sha256(), which is fully deterministic.
 
 See REPORT.md issue #1.
 """
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -20,11 +21,11 @@ POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL")
 
 
 # ---------------------------------------------------------------------------
-# Unit-level: prove hash() is non-deterministic across processes
+# Unit-level: prove _task_to_lock_id is deterministic across processes
 # ---------------------------------------------------------------------------
 
-class TestHashNonDeterminism:
-    """Demonstrate Python hash() randomization without requiring a database."""
+class TestHashDeterminism:
+    """Verify lock IDs are identical across processes (no hash() randomisation)."""
 
     def _get_lock_id_in_subprocess(self, task_name: str) -> int:
         """Spawn a fresh Python process and return the lock ID it computes."""
@@ -40,109 +41,67 @@ class TestHashNonDeterminism:
         )
         return int(result.stdout.strip())
 
-    def test_same_task_produces_different_lock_ids_across_processes(self):
+    def test_same_task_produces_identical_lock_ids_across_processes(self):
         """
-        Two separate processes compute DIFFERENT lock IDs for the same task name.
-
-        This is the root cause: when deployed as multiple pods, each pod acquires
-        its own advisory lock (on a different ID), so they never block each other.
+        Multiple separate processes must compute the SAME lock ID for the same
+        task name so that advisory locks provide real mutual exclusion between pods.
         """
         task_name = "critical-singleton-task"
 
         ids = {self._get_lock_id_in_subprocess(task_name) for _ in range(5)}
 
-        # With hash randomization, we expect multiple distinct IDs across 5 runs.
-        # The probability of all 5 colliding by chance is astronomically small.
-        assert len(ids) > 1, (
-            f"All 5 processes produced the same lock ID {ids}. "
-            "Either PYTHONHASHSEED is fixed in this environment "
-            "or the bug has already been fixed."
+        assert len(ids) == 1, (
+            f"Processes produced different lock IDs for {task_name!r}: {ids}. "
+            "hash() randomisation is still in use — fix not applied."
         )
 
-    def test_lock_ids_vary_per_process(self):
-        """Show the actual diverging values for clarity."""
+    def test_lock_id_matches_expected_sha256_value(self):
+        """Lock ID must equal the first 8 bytes of SHA-256, masked to 63 bits."""
         task_name = "my-task"
-        process_ids = [
-            self._get_lock_id_in_subprocess(task_name) for _ in range(3)
-        ]
-        unique_ids = set(process_ids)
+        digest = hashlib.sha256(task_name.encode()).digest()
+        expected = int.from_bytes(digest[:8], "big") & ((2**63) - 1)
 
-        print(f"\nLock IDs computed by 3 separate processes for {task_name!r}:")
-        for i, lock_id in enumerate(process_ids, 1):
-            print(f"  Process {i}: {lock_id}")
+        actual = HybridPostgresBackend._task_to_lock_id(task_name)
 
-        assert len(unique_ids) > 1, (
-            f"Expected different lock IDs across processes, got: {process_ids}"
+        assert actual == expected, (
+            f"Lock ID {actual} does not match expected SHA-256-derived value {expected}."
         )
 
-    def test_within_same_process_hash_is_stable(self):
-        """
-        Within a single process, hash() is consistent — the bug only manifests
-        across process boundaries, exactly as happens between Kubernetes pods.
-        """
+    def test_lock_id_is_stable_within_process(self):
+        """Multiple calls within the same process must return the same value."""
         task_name = "my-task"
         id1 = HybridPostgresBackend._task_to_lock_id(task_name)
         id2 = HybridPostgresBackend._task_to_lock_id(task_name)
-        assert id1 == id2, "hash() should be stable within a single process"
+        assert id1 == id2
+
+    def test_lock_id_is_within_postgres_bigint_range(self):
+        """Result must fit in a signed 64-bit integer (PostgreSQL bigint)."""
+        lock_id = HybridPostgresBackend._task_to_lock_id("any-task")
+        assert 0 <= lock_id < 2**63
 
 
 # ---------------------------------------------------------------------------
-# Integration: prove two "pods" can hold the lock simultaneously
+# Integration: prove two "pods" cannot hold the lock simultaneously (fix)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.skipif(not POSTGRES_URL, reason="TEST_POSTGRES_URL not set")
-class TestAdvisoryLockBypassIntegration:
+class TestAdvisoryLockMutualExclusionIntegration:
     """
-    Demonstrate that two simulated workers can both acquire the advisory lock
-    for the same task name because they compute different lock IDs.
+    Verify that two simulated workers cannot both hold the same advisory lock
+    because they now compute identical deterministic lock IDs.
 
     Requires a running PostgreSQL instance (TEST_POSTGRES_URL).
     """
 
-    def _acquire_advisory_lock_in_subprocess(self, task_name: str) -> tuple[int, bool]:
+    def test_second_worker_cannot_acquire_while_first_holds_lock(self):
         """
-        Spawn a subprocess that acquires an advisory lock and reports back
-        the lock ID it used and whether acquisition succeeded.
-        Returns (lock_id, acquired).
-        """
-        code = textwrap.dedent(f"""
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-            from pglease.backends.hybrid_postgres import HybridPostgresBackend
+        With the SHA-256 fix in place, both workers compute the same lock ID,
+        so PostgreSQL's advisory lock correctly blocks the second acquisition.
 
-            lock_id = HybridPostgresBackend._task_to_lock_id({task_name!r})
-            conn = psycopg2.connect({POSTGRES_URL!r}, cursor_factory=RealDictCursor)
-            conn.autocommit = True
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
-                acquired = cur.fetchone()[0]
-            print(lock_id, acquired)
-            # Hold the lock briefly so the parent can check
-            import time; time.sleep(1)
-        """)
-        proc = subprocess.Popen(
-            [sys.executable, "-c", code],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        output, _ = proc.communicate()
-        lock_id_str, acquired_str = output.strip().split()
-        return int(lock_id_str), acquired_str == "True"
-
-    def test_two_workers_both_acquire_same_task_simultaneously(self):
-        """
-        Two workers (subprocesses simulating separate pods) BOTH successfully
-        acquire the advisory lock for the same task name at the same time.
-
-        Expected (buggy) result:   worker1_acquired=True, worker2_acquired=True
-        Expected (fixed) result:   worker1_acquired=True, worker2_acquired=False
-
-        This proves the mutual exclusion guarantee is broken.
+        Expected result:  worker1_acquired=True, worker2_acquired=False
         """
         task_name = "singleton-job"
 
-        # Run both workers concurrently
         code = textwrap.dedent(f"""
             import psycopg2
             from psycopg2.extras import RealDictCursor
@@ -155,19 +114,38 @@ class TestAdvisoryLockBypassIntegration:
                 cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
                 acquired = cur.fetchone()[0]
             print(lock_id, acquired)
+            import time; time.sleep(2)  # hold the lock while the other worker tries
         """)
 
         proc1 = subprocess.Popen(
             [sys.executable, "-c", code],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
+
+        import time
+        time.sleep(0.3)  # let proc1 acquire before proc2 starts
+
+        code_no_hold = textwrap.dedent(f"""
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            from pglease.backends.hybrid_postgres import HybridPostgresBackend
+
+            lock_id = HybridPostgresBackend._task_to_lock_id({task_name!r})
+            conn = psycopg2.connect({POSTGRES_URL!r}, cursor_factory=RealDictCursor)
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
+                acquired = cur.fetchone()[0]
+            print(lock_id, acquired)
+        """)
+
         proc2 = subprocess.Popen(
-            [sys.executable, "-c", code],
+            [sys.executable, "-c", code_no_hold],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
 
-        out1, _ = proc1.communicate()
-        out2, _ = proc2.communicate()
+        out1, err1 = proc1.communicate()
+        out2, err2 = proc2.communicate()
 
         lock_id1, acquired1 = out1.strip().split()
         lock_id2, acquired2 = out2.strip().split()
@@ -177,30 +155,12 @@ class TestAdvisoryLockBypassIntegration:
         print(f"\nWorker 1: lock_id={lock_id1}, acquired={acquired1}")
         print(f"Worker 2: lock_id={lock_id2}, acquired={acquired2}")
 
-        if lock_id1 != lock_id2:
-            # BUG CONFIRMED: different lock IDs → both acquire simultaneously
-            assert acquired1 and acquired2, (
-                "Expected both workers to acquire (demonstrating the bug), "
-                f"but got acquired1={acquired1}, acquired2={acquired2}"
-            )
-            pytest.fail(
-                f"\n{'='*60}\n"
-                f"BUG CONFIRMED: hash() randomization breaks mutual exclusion!\n"
-                f"  Task name   : {task_name!r}\n"
-                f"  Worker 1 ID : {lock_id1} → acquired={acquired1}\n"
-                f"  Worker 2 ID : {lock_id2} → acquired={acquired2}\n"
-                f"\n"
-                f"Both workers hold the advisory lock simultaneously because\n"
-                f"they computed DIFFERENT lock IDs for the same task name.\n"
-                f"Fix: replace hash() with hashlib.sha256() in _task_to_lock_id().\n"
-                f"{'='*60}"
-            )
-        else:
-            # Hash seeds happened to collide (rare) — at least one should fail
-            assert not (acquired1 and acquired2), (
-                "Lock IDs matched but both workers acquired — unexpected."
-            )
-            pytest.skip(
-                "PYTHONHASHSEED happened to produce the same ID in both processes. "
-                "Re-run the test to observe the bug."
-            )
+        assert lock_id1 == lock_id2, (
+            f"Lock IDs differ ({lock_id1} vs {lock_id2}) — hash() randomisation "
+            "is still in use. Fix not applied."
+        )
+        assert acquired1, "Worker 1 should have acquired the lock"
+        assert not acquired2, (
+            "Worker 2 should NOT have acquired the lock while Worker 1 holds it. "
+            "Mutual exclusion is broken."
+        )
