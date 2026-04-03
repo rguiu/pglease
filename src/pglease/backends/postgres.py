@@ -238,11 +238,8 @@ class PostgresBackend(Backend):
                             # Lease is held by another owner
                             conn.rollback()
                             time_remaining = (current_expires_at - now).total_seconds()
-                            reason = (
-                                f"Lease held by {current_owner}, "
-                                f"expires in {time_remaining:.1f}s"
-                            )
-                            logger.debug(f"Failed to acquire {task_name}: {reason}")
+                            reason = f"Lease already held, expires in {time_remaining:.1f}s"
+                            logger.debug(f"Failed to acquire {task_name}: held by {current_owner}, {time_remaining:.1f}s remaining")
                             return AcquisitionResult.failed(reason)
 
         except Exception as e:
