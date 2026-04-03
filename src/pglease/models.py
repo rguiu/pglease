@@ -31,6 +31,44 @@ class Lease:
             now = datetime.now(timezone.utc)
         delta = self.expires_at - now
         return max(0.0, delta.total_seconds())
+
+    def is_zombie(
+        self,
+        heartbeat_timeout: float = 60.0,
+        now: Optional[datetime] = None,
+    ) -> bool:
+        """Check whether this lease is a zombie.
+
+        A zombie is a lease that has not expired (``expires_at`` is in the
+        future) but whose heartbeat has been silent for longer than
+        ``heartbeat_timeout`` seconds.  This indicates the worker's heartbeat
+        thread died while the lease table row was not yet naturally expired —
+        i.e. the worker is no longer actively holding the lease even though
+        the row says otherwise.
+
+        Args:
+            heartbeat_timeout: Seconds of heartbeat silence that qualify as
+                zombie.  Should typically be set to a small multiple of the
+                ``heartbeat_interval`` used when creating ``PGLease``
+                (default: 60 s).
+            now: Reference time.  Defaults to ``datetime.now(timezone.utc)``.
+
+        Returns:
+            ``True`` if the lease is active-looking but heartbeat-silent.
+
+        Example::
+
+            lease = pglease.get_lease("my-task")
+            if lease and lease.is_zombie(heartbeat_timeout=30):
+                # safe to take over — worker has gone quiet
+                pglease.try_acquire("my-task", ttl=60)
+        """
+        if now is None:
+            now = datetime.now(timezone.utc)
+        if self.is_expired(now):
+            return False  # expired naturally — not a zombie
+        heartbeat_age = (now - self.heartbeat_at).total_seconds()
+        return heartbeat_age > heartbeat_timeout
     
     def __repr__(self) -> str:
         return (
