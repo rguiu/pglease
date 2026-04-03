@@ -231,7 +231,7 @@ class PGLease:
         self,
         task_name: str,
         ttl: int = 60,
-        timeout: float = 60.0,
+        timeout: Optional[float] = 60.0,
         poll_interval: float = 5.0,
     ) -> bool:
         """
@@ -246,7 +246,9 @@ class PGLease:
             ttl: Time-to-live in seconds for the acquired lease.
             timeout: Maximum seconds to wait before raising
                 :exc:`AcquisitionError` (default: 60 s).
-                Pass ``0`` or ``float('inf')`` to wait indefinitely.
+                Pass ``None`` or ``float('inf')`` to wait indefinitely.
+                Passing ``0`` raises :exc:`ValueError` to avoid confusion
+                with the common ``timeout=0`` non-blocking convention.
             poll_interval: Seconds between retry attempts (default: 5 s).
                 The final sleep is capped to the remaining timeout so the
                 method never overshoots by more than one poll interval.
@@ -257,14 +259,24 @@ class PGLease:
         Raises:
             :exc:`AcquisitionError`: If the timeout expires before the lease
                 becomes available.
+            :exc:`ValueError`: If ``timeout=0`` is passed (use ``None`` or
+                ``float('inf')`` to wait indefinitely).
 
         Example::
 
             # Wait up to 2 minutes for the nightly-report slot
             pglease.wait_for_lease("nightly-report", ttl=300, timeout=120)
             generate_report()
+
+            # Wait indefinitely
+            pglease.wait_for_lease("nightly-report", ttl=300, timeout=None)
         """
-        if timeout in (0, float("inf")):
+        if timeout == 0:
+            raise ValueError(
+                "timeout=0 is ambiguous; pass None or float('inf') to wait forever, "
+                "or use try_acquire() for a single non-blocking attempt."
+            )
+        if timeout is None or timeout == float("inf"):
             deadline = float("inf")
         else:
             deadline = time.monotonic() + timeout

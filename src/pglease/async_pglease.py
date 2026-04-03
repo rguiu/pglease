@@ -137,7 +137,7 @@ class AsyncPGLease:
         self,
         task_name: str,
         ttl: int = 60,
-        timeout: float = 60.0,
+        timeout: Optional[float] = 60.0,
         poll_interval: float = 5.0,
     ) -> bool:
         """Block (asynchronously) until the lease is acquired or timeout.
@@ -145,9 +145,16 @@ class AsyncPGLease:
         Uses :func:`asyncio.sleep` between retries so the event loop is
         not blocked between attempts.  Raises :exc:`AcquisitionError` if
         the timeout expires.
+
+        Pass ``None`` or ``float('inf')`` for *timeout* to wait indefinitely.
+        Passing ``0`` raises :exc:`ValueError`.
         """
         loop = asyncio.get_running_loop()
-        if timeout in (0, float("inf")):
+        if timeout == 0:
+            raise ValueError(
+                "timeout=0 is ambiguous; pass None or float('inf') to wait forever."
+            )
+        if timeout is None or timeout == float("inf"):
             deadline = float("inf")
         else:
             deadline = loop.time() + timeout
