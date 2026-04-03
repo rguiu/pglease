@@ -38,6 +38,65 @@ class PostgresBackend(Backend):
         self._conn: Optional[psycopg2.extensions.connection] = None
         self._lock = threading.Lock()  # guards self._conn across threads
 
+        # Pre-build all SQL query objects using psycopg2.sql so that
+        # TABLE_NAME is always properly quoted as an identifier and never
+        # vulnerable to SQL injection via subclass overrides.
+        _tbl = sql.Identifier(self.TABLE_NAME)
+        _idx = sql.Identifier(f"idx_{self.TABLE_NAME}_expires_at")
+
+        self._sql_create_table = sql.SQL("""
+            CREATE TABLE IF NOT EXISTS {} (
+                task_name    VARCHAR(255) PRIMARY KEY,
+                owner_id     VARCHAR(255) NOT NULL,
+                acquired_at  TIMESTAMP    NOT NULL,
+                expires_at   TIMESTAMP    NOT NULL,
+                heartbeat_at TIMESTAMP    NOT NULL
+            )
+        """).format(_tbl)
+
+        self._sql_create_index = sql.SQL(
+            "CREATE INDEX IF NOT EXISTS {} ON {}(expires_at)"
+        ).format(_idx, _tbl)
+
+        self._sql_select_for_update = sql.SQL("""
+            SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
+            FROM {}
+            WHERE task_name = %s
+            FOR UPDATE
+        """).format(_tbl)
+
+        self._sql_insert = sql.SQL("""
+            INSERT INTO {} (task_name, owner_id, acquired_at, expires_at, heartbeat_at)
+            VALUES (%s, %s, %s, %s, %s)
+        """).format(_tbl)
+
+        self._sql_update_renew = sql.SQL("""
+            UPDATE {} SET expires_at = %s, heartbeat_at = %s
+            WHERE task_name = %s
+        """).format(_tbl)
+
+        self._sql_update_takeover = sql.SQL("""
+            UPDATE {}
+            SET owner_id = %s, acquired_at = %s, expires_at = %s, heartbeat_at = %s
+            WHERE task_name = %s
+        """).format(_tbl)
+
+        self._sql_delete = sql.SQL("""
+            DELETE FROM {}
+            WHERE task_name = %s AND owner_id = %s
+        """).format(_tbl)
+
+        self._sql_heartbeat = sql.SQL("""
+            UPDATE {} SET expires_at = %s, heartbeat_at = %s
+            WHERE task_name = %s AND owner_id = %s
+        """).format(_tbl)
+
+        self._sql_select = sql.SQL("""
+            SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
+            FROM {}
+            WHERE task_name = %s
+        """).format(_tbl)
+
         if auto_initialize:
             self.initialize()
     
@@ -54,26 +113,12 @@ class PostgresBackend(Backend):
     
     def initialize(self) -> None:
         """Create the lease table if it doesn't exist."""
-        create_table_sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
-            task_name VARCHAR(255) PRIMARY KEY,
-            owner_id VARCHAR(255) NOT NULL,
-            acquired_at TIMESTAMP NOT NULL,
-            expires_at TIMESTAMP NOT NULL,
-            heartbeat_at TIMESTAMP NOT NULL
-        );
-        """
-        create_index_sql = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self.TABLE_NAME}_expires_at
-        ON {self.TABLE_NAME}(expires_at);
-        """
-
         try:
             with self._lock:
                 conn = self._get_connection()
                 with conn.cursor() as cur:
-                    cur.execute(create_table_sql)
-                    cur.execute(create_index_sql)
+                    cur.execute(self._sql_create_table)
+                    cur.execute(self._sql_create_index)
                 conn.commit()
             logger.info(f"Initialized {self.TABLE_NAME} table")
         except Exception as e:
@@ -101,26 +146,14 @@ class PostgresBackend(Backend):
                 conn = self._get_connection()
                 with conn.cursor() as cur:
                     # Try to lock existing row
-                    cur.execute(
-                        f"""
-                        SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
-                        FROM {self.TABLE_NAME}
-                        WHERE task_name = %s
-                        FOR UPDATE
-                        """,
-                        (task_name,)
-                    )
+                    cur.execute(self._sql_select_for_update, (task_name,))
 
                     row = cur.fetchone()
 
                     if row is None:
                         # Lease doesn't exist - create it
                         cur.execute(
-                            f"""
-                            INSERT INTO {self.TABLE_NAME}
-                            (task_name, owner_id, acquired_at, expires_at, heartbeat_at)
-                            VALUES (%s, %s, %s, %s, %s)
-                            """,
+                            self._sql_insert,
                             (task_name, owner_id, now, expires_at, now)
                         )
                         conn.commit()
@@ -144,11 +177,7 @@ class PostgresBackend(Backend):
                         if current_owner == owner_id:
                             # Renew our own lease
                             cur.execute(
-                                f"""
-                                UPDATE {self.TABLE_NAME}
-                                SET expires_at = %s, heartbeat_at = %s
-                                WHERE task_name = %s
-                                """,
+                                self._sql_update_renew,
                                 (expires_at, now, task_name)
                             )
                             conn.commit()
@@ -167,11 +196,7 @@ class PostgresBackend(Backend):
                         if current_expires_at <= now:
                             # Take over expired lease
                             cur.execute(
-                                f"""
-                                UPDATE {self.TABLE_NAME}
-                                SET owner_id = %s, acquired_at = %s, expires_at = %s, heartbeat_at = %s
-                                WHERE task_name = %s
-                                """,
+                                self._sql_update_takeover,
                                 (owner_id, now, expires_at, now, task_name)
                             )
                             conn.commit()
@@ -216,13 +241,7 @@ class PostgresBackend(Backend):
             with self._lock:
                 conn = self._get_connection()
                 with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        DELETE FROM {self.TABLE_NAME}
-                        WHERE task_name = %s AND owner_id = %s
-                        """,
-                        (task_name, owner_id)
-                    )
+                    cur.execute(self._sql_delete, (task_name, owner_id))
                     deleted = cur.rowcount > 0
                 conn.commit()
 
@@ -252,14 +271,7 @@ class PostgresBackend(Backend):
             with self._lock:
                 conn = self._get_connection()
                 with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        UPDATE {self.TABLE_NAME}
-                        SET expires_at = %s, heartbeat_at = %s
-                        WHERE task_name = %s AND owner_id = %s
-                        """,
-                        (expires_at, now, task_name, owner_id)
-                    )
+                    cur.execute(self._sql_heartbeat, (expires_at, now, task_name, owner_id))
                     updated = cur.rowcount > 0
                 conn.commit()
 
@@ -282,14 +294,7 @@ class PostgresBackend(Backend):
             with self._lock:
                 conn = self._get_connection()
                 with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
-                        FROM {self.TABLE_NAME}
-                        WHERE task_name = %s
-                        """,
-                        (task_name,)
-                    )
+                    cur.execute(self._sql_select, (task_name,))
                     row = cur.fetchone()
 
             if row is None:
