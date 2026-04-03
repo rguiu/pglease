@@ -138,6 +138,8 @@ class PostgresBackend(Backend):
         4. If available, acquire/update the lease
         5. Commit transaction
         """
+        if ttl <= 0:
+            raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
         now = datetime.utcnow()
         expires_at = now + timedelta(seconds=ttl)
         
@@ -264,6 +266,8 @@ class PostgresBackend(Backend):
         
         Only updates if the lease is owned by the specified owner.
         """
+        if ttl <= 0:
+            raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
         now = datetime.utcnow()
         expires_at = now + timedelta(seconds=ttl)
         
