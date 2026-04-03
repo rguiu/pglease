@@ -6,6 +6,8 @@ Combines the benefits of both approaches:
 - Lease table for observability, metadata, and TTL safety net
 """
 
+from __future__ import annotations
+
 import hashlib
 import logging
 from datetime import datetime, timedelta

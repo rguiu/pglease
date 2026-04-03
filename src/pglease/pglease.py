@@ -1,5 +1,7 @@
 """Main PGLease class for distributed task coordination."""
 
+from __future__ import annotations
+
 import functools
 import logging
 import uuid
