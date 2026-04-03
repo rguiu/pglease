@@ -100,6 +100,19 @@ def _make_fake_backend(detector: ConcurrencyDetector, sleep_s: float = 0.01):
     backend._lock = threading.Lock()   # real lock (used by the fix)
     backend._get_connection = lambda: fake_conn
 
+    # Provide the pre-built SQL objects that __init__ would normally create.
+    # The fake cursor ignores their content, so plain MagicMocks work fine.
+    _sentinel = MagicMock()
+    backend._sql_create_table = _sentinel
+    backend._sql_create_index = _sentinel
+    backend._sql_select_for_update = _sentinel
+    backend._sql_insert = _sentinel
+    backend._sql_update_renew = _sentinel
+    backend._sql_update_takeover = _sentinel
+    backend._sql_delete = _sentinel
+    backend._sql_heartbeat = _sentinel
+    backend._sql_select = _sentinel
+
     return backend
 
 
