@@ -2,7 +2,7 @@
 
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import re
@@ -32,6 +32,18 @@ def _scrub_exc(exc: Exception) -> str:
     # Key=value form: password=<token>
     msg = re.sub(r'(?i)(password\s*=\s*)\S+', r'\1***', msg)
     return msg
+
+
+def _to_utc(dt: datetime) -> datetime:
+    """Ensure a datetime is timezone-aware UTC.
+
+    psycopg2 may return either naive datetimes (plain TIMESTAMP column) or
+    timezone-aware UTC datetimes (TIMESTAMPTZ or server configured with
+    timezone=UTC).  Normalise to aware so comparisons never raise TypeError.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class PostgresBackend(Backend):
@@ -166,16 +178,15 @@ class PostgresBackend(Backend):
         """
         if ttl <= 0:
             raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=ttl)
-        
+
         try:
             with self._lock:
                 conn = self._get_connection()
                 with conn.cursor() as cur:
                     # Try to lock existing row
                     cur.execute(self._sql_select_for_update, (task_name,))
-
                     row = cur.fetchone()
 
                     if row is None:
@@ -185,7 +196,6 @@ class PostgresBackend(Backend):
                             (task_name, owner_id, now, expires_at, now)
                         )
                         conn.commit()
-
                         lease = Lease(
                             task_name=task_name,
                             owner_id=owner_id,
@@ -198,7 +208,7 @@ class PostgresBackend(Backend):
 
                     else:
                         # Lease exists - check if available
-                        current_expires_at = row["expires_at"]
+                        current_expires_at = _to_utc(row["expires_at"])
                         current_owner = row["owner_id"]
 
                         # Check if we already own it
@@ -209,11 +219,10 @@ class PostgresBackend(Backend):
                                 (expires_at, now, task_name)
                             )
                             conn.commit()
-
                             lease = Lease(
                                 task_name=task_name,
                                 owner_id=owner_id,
-                                acquired_at=row["acquired_at"],
+                                acquired_at=_to_utc(row["acquired_at"]),
                                 expires_at=expires_at,
                                 heartbeat_at=now,
                             )
@@ -228,7 +237,6 @@ class PostgresBackend(Backend):
                                 (owner_id, now, expires_at, now, task_name)
                             )
                             conn.commit()
-
                             lease = Lease(
                                 task_name=task_name,
                                 owner_id=owner_id,
@@ -247,7 +255,10 @@ class PostgresBackend(Backend):
                             conn.rollback()
                             time_remaining = (current_expires_at - now).total_seconds()
                             reason = f"Lease already held, expires in {time_remaining:.1f}s"
-                            logger.debug(f"Failed to acquire {task_name}: held by {current_owner}, {time_remaining:.1f}s remaining")
+                            logger.debug(
+                                f"Failed to acquire {task_name}: held by "
+                                f"{current_owner}, {time_remaining:.1f}s remaining"
+                            )
                             return AcquisitionResult.failed(reason)
 
         except Exception as e:
@@ -291,7 +302,7 @@ class PostgresBackend(Backend):
         """
         if ttl <= 0:
             raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=ttl)
         
         try:
@@ -330,9 +341,9 @@ class PostgresBackend(Backend):
             return Lease(
                 task_name=row["task_name"],
                 owner_id=row["owner_id"],
-                acquired_at=row["acquired_at"],
-                expires_at=row["expires_at"],
-                heartbeat_at=row["heartbeat_at"],
+                acquired_at=_to_utc(row["acquired_at"]),
+                expires_at=_to_utc(row["expires_at"]),
+                heartbeat_at=_to_utc(row["heartbeat_at"]),
             )
 
         except Exception as e:

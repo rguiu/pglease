@@ -1,9 +1,14 @@
 """Tests for core models."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from pglease.models import Lease, AcquisitionResult
+
+
+def _utcnow() -> datetime:
+    """Return current UTC time as a timezone-aware datetime."""
+    return datetime.now(timezone.utc)
 
 
 class TestLease:
@@ -11,7 +16,7 @@ class TestLease:
     
     def test_lease_creation(self):
         """Test creating a lease."""
-        now = datetime.utcnow()
+        now = _utcnow()
         expires = now + timedelta(seconds=60)
         
         lease = Lease(
@@ -29,7 +34,7 @@ class TestLease:
     
     def test_is_expired(self):
         """Test lease expiration check."""
-        now = datetime.utcnow()
+        now = _utcnow()
         expired = now - timedelta(seconds=10)
         future = now + timedelta(seconds=60)
         
@@ -55,7 +60,7 @@ class TestLease:
     
     def test_time_remaining(self):
         """Test time remaining calculation."""
-        now = datetime.utcnow()
+        now = _utcnow()
         expires = now + timedelta(seconds=60)
         
         lease = Lease(
@@ -86,7 +91,7 @@ class TestAcquisitionResult:
     
     def test_acquired_result(self):
         """Test successful acquisition result."""
-        now = datetime.utcnow()
+        now = _utcnow()
         lease = Lease(
             task_name="test-task",
             owner_id="worker-1",

@@ -1,7 +1,7 @@
 """Core data models for pglease."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -22,13 +22,13 @@ class Lease:
     def is_expired(self, now: Optional[datetime] = None) -> bool:
         """Check if the lease has expired."""
         if now is None:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
         return now >= self.expires_at
     
     def time_remaining(self, now: Optional[datetime] = None) -> float:
         """Get remaining time in seconds before lease expires."""
         if now is None:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
         delta = self.expires_at - now
         return max(0.0, delta.total_seconds())
     
