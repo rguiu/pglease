@@ -4,7 +4,7 @@ pglease - Distributed Task Coordination Library
 A lightweight coordination library for singleton task execution across distributed systems.
 """
 
-from .coordinator import PGLease
+from .pglease import PGLease
 from .exceptions import (
     PgleaseError,
     AcquisitionError,
