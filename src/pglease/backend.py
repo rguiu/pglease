@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from .models import Lease, AcquisitionResult
 
@@ -113,5 +113,15 @@ class Backend(ABC):
         active (non-expired) leases are never touched.  Recommended to run
         periodically (e.g. every hour or via a cron job) to prevent the
         lease table from growing without bound.
+        """
+        pass
+
+    @abstractmethod
+    def list_leases(self) -> List[Lease]:
+        """
+        Return all current leases in the store (active and expired).
+
+        Useful for monitoring dashboards, health checks, and debugging.
+        Returns an empty list if no leases exist.
         """
         pass

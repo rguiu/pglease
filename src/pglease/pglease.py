@@ -6,7 +6,7 @@ import functools
 import logging
 import uuid
 from contextlib import contextmanager
-from typing import Callable, Optional, TypeVar, Union
+from typing import Callable, List, Optional, TypeVar, Union
 
 from .backend import Backend
 from .backends.postgres import PostgresBackend
@@ -185,6 +185,25 @@ class PGLease:
             Current Lease if exists, None otherwise
         """
         return self.backend.get_lease(task_name)
+
+    def list_leases(self) -> List[Lease]:
+        """
+        Return all leases currently in the store.
+
+        Includes both active leases (not expired) and any expired rows not
+        yet cleaned up.  Useful for monitoring dashboards and health checks.
+
+        Returns:
+            List of :class:`Lease` objects, ordered by task name.
+
+        Example::
+
+            for lease in pglease.list_leases():
+                remaining = lease.time_remaining()
+                status = "active" if remaining > 0 else "expired"
+                print(f"{lease.task_name}: {status} ({remaining:.0f}s left)")
+        """
+        return self.backend.list_leases()
 
     def cleanup_expired(self) -> int:
         """

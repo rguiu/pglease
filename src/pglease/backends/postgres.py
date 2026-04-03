@@ -3,7 +3,7 @@
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 
 import re
 
@@ -133,6 +133,12 @@ class PostgresBackend(Backend):
             SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
             FROM {}
             WHERE task_name = %s
+        """).format(_tbl)
+
+        self._sql_list = sql.SQL("""
+            SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
+            FROM {}
+            ORDER BY task_name
         """).format(_tbl)
 
         self._sql_cleanup_expired = sql.SQL("""
@@ -353,6 +359,29 @@ class PostgresBackend(Backend):
 
         except Exception as e:
             raise BackendError(f"Failed to get lease: {_scrub_exc(e)}") from e
+
+    def list_leases(self) -> List[Lease]:
+        """Return all leases currently in the store."""
+        try:
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute(self._sql_list)
+                    rows = cur.fetchall()
+
+            return [
+                Lease(
+                    task_name=row["task_name"],
+                    owner_id=row["owner_id"],
+                    acquired_at=_to_utc(row["acquired_at"]),
+                    expires_at=_to_utc(row["expires_at"]),
+                    heartbeat_at=_to_utc(row["heartbeat_at"]),
+                )
+                for row in rows
+            ]
+
+        except Exception as e:
+            raise BackendError(f"Failed to list leases: {_scrub_exc(e)}") from e
 
     def cleanup_expired(self) -> int:
         """Delete expired lease rows and return the number removed."""
