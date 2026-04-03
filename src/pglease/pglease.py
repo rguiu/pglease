@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -76,7 +77,10 @@ class PGLease:
 
         # Track active leases for cleanup
         self._active_leases: set[str] = set()
-        
+        # CRITICAL-001: guards all read-modify-write access to _active_leases
+        # from both the main thread and background heartbeat threads.
+        self._active_leases_lock = threading.Lock()
+
         logger.info(f"Initialized PGLease with owner_id={self.owner_id}")
     
     @staticmethod
@@ -105,16 +109,24 @@ class PGLease:
                 finally:
                     coordinator.release("my-task")
         """
+        # MEDIUM-003: validate TTL at the API layer before reaching the backend
+        if ttl <= 0:
+            raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
+
         result = self.backend.acquire(task_name, self.owner_id, ttl)
-        
+
         if result.success:
-            self._active_leases.add(task_name)
+            with self._active_leases_lock:  # CRITICAL-001
+                self._active_leases.add(task_name)
             # Start heartbeat to keep lease alive.
             # The internal callback removes the task from _active_leases so
             # that close() does not attempt to release an already-lost lease,
             # then forwards to any user-supplied on_lease_lost handler.
             def _on_lost(lost_task: str) -> None:
-                self._active_leases.discard(lost_task)
+                with self._active_leases_lock:  # CRITICAL-001
+                    self._active_leases.discard(lost_task)
+                # Call user callback OUTSIDE the lock to avoid deadlock if
+                # the callback calls release() or close().
                 if self._on_lease_lost is not None:
                     self._on_lease_lost(lost_task)
 
@@ -161,18 +173,22 @@ class PGLease:
         Returns:
             True if lease was released, False if not held
         """
-        # Stop heartbeat first
-        self.heartbeat_manager.stop(task_name)
-        
-        # Release lease
+        # HIGH-001: Release the DB lease FIRST so no other worker can acquire
+        # the task between the heartbeat stopping and the DB row being deleted.
+        # After the DELETE succeeds, the lease is gone from the DB and the
+        # heartbeat.stop() call below is purely cleanup with no critical window.
         released = self.backend.release(task_name, self.owner_id)
-        
+
+        # Stop heartbeat after the DB row is gone (cleanup only).
+        self.heartbeat_manager.stop(task_name)
+
         if released:
-            self._active_leases.discard(task_name)
+            with self._active_leases_lock:  # CRITICAL-001
+                self._active_leases.discard(task_name)
             logger.info(f"Released lease for {task_name}")
         else:
             logger.debug(f"No lease to release for {task_name}")
-        
+
         return released
     
     def get_lease(self, task_name: str) -> Optional[Lease]:
@@ -271,6 +287,9 @@ class PGLease:
             # Wait indefinitely
             pglease.wait_for_lease("nightly-report", ttl=300, timeout=None)
         """
+        # MEDIUM-003: validate TTL before entering the retry loop
+        if ttl <= 0:
+            raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
         if timeout == 0:
             raise ValueError(
                 "timeout=0 is ambiguous; pass None or float('inf') to wait forever, "
@@ -317,9 +336,14 @@ class PGLease:
             @coordinator.singleton_task("my-task", ttl=60)
             def my_task():
                 perform_critical_operation()
-            
+
             my_task()  # Only runs if lease acquired
         """
+        # MEDIUM-003: validate TTL at decoration time so misconfiguration
+        # is caught immediately rather than silently at the first call.
+        if ttl <= 0:
+            raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
+
         def decorator(func: F) -> F:
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
@@ -350,17 +374,23 @@ class PGLease:
         Stops all heartbeats, releases all leases, and closes backend.
         """
         logger.info("Closing coordinator")
-        
-        # Stop all heartbeats
+
+        # Stop all heartbeats (signals threads; joins them).
         self.heartbeat_manager.stop_all()
-        
-        # Release all active leases
-        for task_name in list(self._active_leases):
+
+        # CRITICAL-001: snapshot the set under the lock so that concurrent
+        # on_lease_lost callbacks cannot mutate _active_leases while we
+        # iterate.  We then release the lock before calling release() so
+        # that release() can itself acquire the lock when it calls discard().
+        with self._active_leases_lock:
+            tasks_to_release = list(self._active_leases)
+
+        for task_name in tasks_to_release:
             try:
                 self.release(task_name)
             except Exception as e:
                 logger.error(f"Error releasing {task_name}: {e}")
-        
+
         # Close backend
         self.backend.close()
     

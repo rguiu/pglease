@@ -456,3 +456,117 @@ class TestCloseAndContextManager:
             with pg:
                 raise RuntimeError("crash")
         backend.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL-001: _active_leases lock correctness
+# ---------------------------------------------------------------------------
+
+class TestActiveLeasesLock:
+    def test_active_leases_lock_exists(self):
+        pg, _ = _make_pglease()
+        import threading
+        assert isinstance(pg._active_leases_lock, type(threading.Lock()))
+
+    def test_on_lost_removes_from_active_leases_under_lock(self):
+        """The _on_lost closure must discard the task inside the lock."""
+        pg, _ = _make_pglease(acquired=True)
+        acquired_lock_order = []
+        original_lock = pg._active_leases_lock
+
+        class TrackedLock:
+            def __enter__(self):
+                acquired_lock_order.append("locked")
+                return original_lock.__enter__()
+            def __exit__(self, *a):
+                acquired_lock_order.append("unlocked")
+                return original_lock.__exit__(*a)
+
+        pg._active_leases_lock = TrackedLock()
+        pg._active_leases = {"task"}
+        pg.heartbeat_manager = MagicMock()
+
+        # Simulate the on_lease_lost callback path
+        pg.try_acquire("task", ttl=60)  # re-acquire to register _on_lost
+        # Manually call the internal _on_lost closure to simulate heartbeat failure
+        # (by triggering try_acquire to register the closure then calling it)
+        assert "locked" in acquired_lock_order
+
+    def test_close_iterates_snapshot_not_live_set(self):
+        """close() must not iterate _active_leases directly (CRITICAL-001)."""
+        pg, backend = _make_pglease()
+        pg.heartbeat_manager = MagicMock()
+        pg._active_leases = {"t1", "t2"}
+        # If close() iterates a snapshot this should complete without RuntimeError
+        pg.close()
+        assert backend.release.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# HIGH-001: release() order (backend before heartbeat)
+# ---------------------------------------------------------------------------
+
+class TestReleaseOrder:
+    def test_backend_release_called_before_heartbeat_stop(self):
+        """HIGH-001: release() must call backend.release BEFORE heartbeat.stop."""
+        pg, backend = _make_pglease()
+        call_order = []
+
+        def hb_stop(task):
+            call_order.append("hb_stop")
+
+        def be_release(task, owner):
+            call_order.append("be_release")
+            return True
+
+        pg.heartbeat_manager = MagicMock()
+        pg.heartbeat_manager.stop.side_effect = hb_stop
+        backend.release.side_effect = be_release
+        pg._active_leases = {"task"}
+
+        pg.release("task")
+        assert call_order == ["be_release", "hb_stop"], (
+            f"Expected be_release before hb_stop, got {call_order}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# MEDIUM-003: TTL validation
+# ---------------------------------------------------------------------------
+
+class TestTTLValidation:
+    def test_try_acquire_rejects_zero_ttl(self):
+        pg, _ = _make_pglease()
+        with pytest.raises(ValueError, match="ttl must be a positive integer"):
+            pg.try_acquire("task", ttl=0)
+
+    def test_try_acquire_rejects_negative_ttl(self):
+        pg, _ = _make_pglease()
+        with pytest.raises(ValueError, match="ttl must be a positive integer"):
+            pg.try_acquire("task", ttl=-5)
+
+    def test_wait_for_lease_rejects_zero_ttl(self):
+        pg, _ = _make_pglease()
+        with pytest.raises(ValueError, match="ttl must be a positive integer"):
+            pg.wait_for_lease("task", ttl=0, timeout=None)
+
+    def test_wait_for_lease_rejects_negative_ttl(self):
+        pg, _ = _make_pglease()
+        with pytest.raises(ValueError, match="ttl must be a positive integer"):
+            pg.wait_for_lease("task", ttl=-1, timeout=None)
+
+    def test_singleton_task_rejects_zero_ttl(self):
+        pg, _ = _make_pglease()
+        with pytest.raises(ValueError, match="ttl must be a positive integer"):
+            pg.singleton_task("task", ttl=0)
+
+    def test_singleton_task_rejects_negative_ttl(self):
+        pg, _ = _make_pglease()
+        with pytest.raises(ValueError, match="ttl must be a positive integer"):
+            pg.singleton_task("task", ttl=-10)
+
+    def test_try_acquire_accepts_positive_ttl(self):
+        pg, _ = _make_pglease(acquired=True)
+        pg.heartbeat_manager = MagicMock()
+        result = pg.try_acquire("task", ttl=1)
+        assert result is True

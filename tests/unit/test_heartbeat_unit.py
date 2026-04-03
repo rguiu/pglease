@@ -145,13 +145,17 @@ class TestHeartbeatLoopFailure:
         assert "task" in lost
 
     def test_heartbeat_exception_triggers_on_lease_lost(self):
-        """An exception from backend.heartbeat() should also call on_lease_lost."""
+        """An exception from backend.heartbeat() should also call on_lease_lost.
+
+        MEDIUM-001 retry logic means the loop tries 3 times with exponential
+        backoff (1 s + 2 s) before giving up, so we wait up to 6 s.
+        """
         mgr, backend = _make_manager(interval=0.05)
         backend.heartbeat.side_effect = Exception("DB is dead")
         lost = []
 
         mgr.start("task", "owner", ttl=60, on_lease_lost=lambda t: lost.append(t))
-        deadline = time.monotonic() + 2.0
+        deadline = time.monotonic() + 6.0
         while time.monotonic() < deadline and not lost:
             time.sleep(0.01)
 
@@ -194,3 +198,71 @@ class TestHeartbeatLoopFailure:
         mgr.start("task", "owner", ttl=60)  # no on_lease_lost
         time.sleep(0.3)
         # Should not raise; thread simply exits
+
+
+# ---------------------------------------------------------------------------
+# MEDIUM-001: retry logic for transient errors
+# ---------------------------------------------------------------------------
+
+class TestHeartbeatRetryLogic:
+    def test_transient_exception_retried_then_succeeds(self):
+        """Two transient failures followed by success must NOT call on_lease_lost."""
+        mgr, backend = _make_manager(interval=0.05)
+        # Fail twice on the first tick, then succeed indefinitely.
+        call_count = [0]
+
+        def hb_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                raise Exception("hiccup")
+            return True
+
+        backend.heartbeat.side_effect = hb_side_effect
+        lost = []
+        mgr.start("task", "owner", ttl=60, on_lease_lost=lambda t: lost.append(t))
+        # Allow enough time for 2 retries (1s + 2s backoff) plus margin
+        time.sleep(4.0)
+        mgr.stop("task")
+        assert lost == [], "on_lease_lost should NOT fire when heartbeat eventually succeeds"
+
+    def test_persistent_exception_eventually_calls_on_lease_lost(self):
+        """If ALL retry attempts fail the callback must still be invoked."""
+        mgr, backend = _make_manager(interval=0.05)
+        backend.heartbeat.side_effect = Exception("permanent failure")
+        lost = []
+        mgr.start("task", "owner", ttl=60, on_lease_lost=lambda t: lost.append(t))
+        deadline = time.monotonic() + 6.0
+        while time.monotonic() < deadline and not lost:
+            time.sleep(0.02)
+        assert "task" in lost, "on_lease_lost must fire after all retries exhausted"
+
+    def test_lease_lost_heartbeat_false_not_retried(self):
+        """A False return from backend.heartbeat() is a HeartbeatError (lease
+        stolen/expired) and must NOT be retried — it fires on_lease_lost immediately."""
+        mgr, backend = _make_manager(interval=0.05)
+        backend.heartbeat.return_value = False
+        lost = []
+        mgr.start("task", "owner", ttl=60, on_lease_lost=lambda t: lost.append(t))
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not lost:
+            time.sleep(0.01)
+        # Should fire quickly (no backoff) and backend.heartbeat called only once
+        assert "task" in lost
+        assert backend.heartbeat.call_count == 1, "False return must not be retried"
+
+
+# ---------------------------------------------------------------------------
+# HIGH-002: zombie thread tracking
+# ---------------------------------------------------------------------------
+
+class TestZombieThreads:
+    def test_get_zombie_threads_empty_initially(self):
+        mgr, _ = _make_manager()
+        assert mgr.get_zombie_threads() == []
+
+    def test_get_zombie_threads_returns_copy(self):
+        """Mutating the returned list must not affect internal state."""
+        mgr, _ = _make_manager()
+        result = mgr.get_zombie_threads()
+        result.append("fake-task")
+        assert mgr.get_zombie_threads() == []

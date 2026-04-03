@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from .backend import Backend
 from .exceptions import HeartbeatError
@@ -38,6 +38,9 @@ class HeartbeatManager:
         self._stop_events: Dict[str, threading.Event] = {}
         self._callbacks: Dict[str, Optional[Callable[[str], None]]] = {}
         self._lock = threading.RLock()  # RLock: re-entrant so start() can call stop() while holding the lock
+        # HIGH-002: threads that did not exit within the join timeout are
+        # tracked here so callers can observe the leak and alert on it.
+        self._zombie_threads: Dict[str, threading.Thread] = {}
 
     def start(
         self,
@@ -108,10 +111,18 @@ class HeartbeatManager:
         if thread and thread.is_alive():
             thread.join(timeout=30.0)
             if thread.is_alive():
-                logger.warning(
+                # HIGH-002: thread did not exit — it is probably blocked on a
+                # database operation.  We cannot kill OS threads in Python, so
+                # we demote it to "zombie" status: it is no longer tracked as
+                # an active heartbeat but is recorded so operators can observe
+                # the leak and investigate the root cause.
+                logger.error(
                     f"Heartbeat thread for {task_name} did not exit within "
-                    "30 s; it may still be blocked on a database operation."
+                    "30 s. Marking as zombie — database may be unresponsive. "
+                    "Call get_zombie_threads() to list all zombie tasks."
                 )
+                with self._lock:
+                    self._zombie_threads[task_name] = thread
 
         # Clean up after the thread has finished (or timed out).
         with self._lock:
@@ -125,9 +136,22 @@ class HeartbeatManager:
         """Stop all heartbeat threads."""
         with self._lock:
             task_names = list(self._threads.keys())
-        
+
         for task_name in task_names:
             self.stop(task_name)
+
+    def get_zombie_threads(self) -> List[str]:
+        """Return task names whose heartbeat threads became zombies.
+
+        A zombie thread failed to exit within the 30-second join timeout
+        in :meth:`stop`, typically because it is blocked on a database
+        operation.  This method is intended for monitoring and alerting.
+
+        Returns:
+            List of task names with zombie heartbeat threads.
+        """
+        with self._lock:
+            return list(self._zombie_threads.keys())
     
     def _heartbeat_loop(
         self,
@@ -145,30 +169,49 @@ class HeartbeatManager:
         """
         logger.info(f"Heartbeat loop started for {task_name} (interval={self.interval}s)")
         failed = False
+        _max_retries = 3
 
         while not stop_event.is_set():
             # Wait for interval or until stopped
             if stop_event.wait(timeout=self.interval):
                 break
 
-            # Send heartbeat
-            try:
-                success = self.backend.heartbeat(task_name, owner_id, ttl)
+            # MEDIUM-001: retry transient (non-lease-loss) errors with
+            # exponential backoff before declaring the heartbeat as failed.
+            for attempt in range(_max_retries):
+                try:
+                    success = self.backend.heartbeat(task_name, owner_id, ttl)
 
-                if not success:
-                    raise HeartbeatError(
-                        f"Heartbeat failed for {task_name}: lease no longer "
-                        f"owned by {owner_id} (stolen or expired)"
-                    )
+                    if not success:
+                        # Lease is genuinely gone — no point retrying.
+                        raise HeartbeatError(
+                            f"Heartbeat failed for {task_name}: lease no longer "
+                            f"owned by {owner_id} (stolen or expired)"
+                        )
+                    break  # heartbeat succeeded
 
-            except HeartbeatError as e:
-                logger.error(str(e))
-                failed = True
-                break
+                except HeartbeatError as e:
+                    logger.error(str(e))
+                    failed = True
+                    break  # do not retry — lease is lost
 
-            except Exception as e:
-                logger.error(f"Heartbeat error for {task_name}: {e}")
-                failed = True
+                except Exception as e:
+                    if attempt < _max_retries - 1:
+                        backoff = 2 ** attempt  # 1 s, 2 s
+                        logger.warning(
+                            f"Transient heartbeat error for {task_name} "
+                            f"(attempt {attempt + 1}/{_max_retries}): {e}. "
+                            f"Retrying in {backoff}s…"
+                        )
+                        time.sleep(backoff)
+                    else:
+                        logger.error(
+                            f"Heartbeat for {task_name} failed after "
+                            f"{_max_retries} attempts: {e}"
+                        )
+                        failed = True
+
+            if failed:
                 break
 
         logger.info(f"Heartbeat loop stopped for {task_name}")
