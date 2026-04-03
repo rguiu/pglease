@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import time
 import uuid
 from contextlib import contextmanager
 from typing import Callable, List, Optional, TypeVar, Union
@@ -225,6 +226,63 @@ class PGLease:
                     logging.info("Cleaned %d stale lease(s)", removed)
         """
         return self.backend.cleanup_expired()
+
+    def wait_for_lease(
+        self,
+        task_name: str,
+        ttl: int = 60,
+        timeout: float = 60.0,
+        poll_interval: float = 5.0,
+    ) -> bool:
+        """
+        Block until a lease is acquired or the timeout expires.
+
+        Repeatedly calls :meth:`try_acquire` with a configurable polling
+        interval until the lease becomes available.  Useful when you want
+        to wait for a task slot without writing your own retry loop.
+
+        Args:
+            task_name: Unique identifier for the task.
+            ttl: Time-to-live in seconds for the acquired lease.
+            timeout: Maximum seconds to wait before raising
+                :exc:`AcquisitionError` (default: 60 s).
+                Pass ``0`` or ``float('inf')`` to wait indefinitely.
+            poll_interval: Seconds between retry attempts (default: 5 s).
+                The final sleep is capped to the remaining timeout so the
+                method never overshoots by more than one poll interval.
+
+        Returns:
+            ``True`` once the lease has been successfully acquired.
+
+        Raises:
+            :exc:`AcquisitionError`: If the timeout expires before the lease
+                becomes available.
+
+        Example::
+
+            # Wait up to 2 minutes for the nightly-report slot
+            pglease.wait_for_lease("nightly-report", ttl=300, timeout=120)
+            generate_report()
+        """
+        if timeout in (0, float("inf")):
+            deadline = float("inf")
+        else:
+            deadline = time.monotonic() + timeout
+
+        while True:
+            if self.try_acquire(task_name, ttl):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AcquisitionError(
+                    f"Timed out waiting {timeout:.1f}s for lease {task_name!r}"
+                )
+            sleep_for = min(poll_interval, remaining)
+            logger.debug(
+                f"Lease {task_name!r} not available; retrying in {sleep_for:.1f}s "
+                f"({remaining:.1f}s remaining)"
+            )
+            time.sleep(sleep_for)
     
     def singleton_task(
         self,
