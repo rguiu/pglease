@@ -48,9 +48,33 @@ class HybridPostgresBackend(PostgresBackend):
     - Double safety: advisory lock + TTL
     """
     
-    def __init__(self, connection_string: str, auto_initialize: bool = True):
-        """Initialize hybrid backend."""
-        super().__init__(connection_string, auto_initialize)
+    def __init__(
+        self,
+        connection_string: str,
+        auto_initialize: bool = True,
+        connect_timeout: int = 10,
+        pool_size: int = 1,
+    ):
+        """Initialize hybrid backend.
+
+        Args:
+            connection_string: PostgreSQL connection string.
+            auto_initialize: Automatically create the lease table if needed.
+            connect_timeout: Seconds to wait for a connection before raising
+                (default 10).  Forwarded to
+                :class:`~pglease.backends.postgres.PostgresBackend`.
+            pool_size: Maximum number of simultaneous database connections
+                for lease-table operations (default 1).  Note that advisory
+                lock operations always use the dedicated single persistent
+                connection (``self._conn``) regardless of this setting,
+                because advisory locks are session-scoped.
+        """
+        super().__init__(
+            connection_string,
+            auto_initialize=auto_initialize,
+            connect_timeout=connect_timeout,
+            pool_size=pool_size,
+        )
         self._held_locks: dict[str, int] = {}  # task_name -> lock_id
     
     @staticmethod
