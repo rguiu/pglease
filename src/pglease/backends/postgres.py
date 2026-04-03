@@ -1,6 +1,7 @@
 """PostgreSQL backend implementation for pglease."""
 
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -35,7 +36,8 @@ class PostgresBackend(Backend):
         """
         self.connection_string = connection_string
         self._conn: Optional[psycopg2.extensions.connection] = None
-        
+        self._lock = threading.Lock()  # guards self._conn across threads
+
         if auto_initialize:
             self.initialize()
     
@@ -60,20 +62,24 @@ class PostgresBackend(Backend):
             expires_at TIMESTAMP NOT NULL,
             heartbeat_at TIMESTAMP NOT NULL
         );
-        
+        """
+        create_index_sql = f"""
         CREATE INDEX IF NOT EXISTS idx_{self.TABLE_NAME}_expires_at
         ON {self.TABLE_NAME}(expires_at);
         """
-        
+
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:
-                cur.execute(create_table_sql)
-            conn.commit()
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute(create_table_sql)
+                    cur.execute(create_index_sql)
+                conn.commit()
             logger.info(f"Initialized {self.TABLE_NAME} table")
         except Exception as e:
-            if self._conn:
-                self._conn.rollback()
+            with self._lock:
+                if self._conn:
+                    self._conn.rollback()
             raise BackendError(f"Failed to initialize backend: {e}") from e
     
     def acquire(self, task_name: str, owner_id: str, ttl: int) -> AcquisitionResult:
@@ -91,84 +97,34 @@ class PostgresBackend(Backend):
         expires_at = now + timedelta(seconds=ttl)
         
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:
-                # Try to lock existing row
-                cur.execute(
-                    f"""
-                    SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
-                    FROM {self.TABLE_NAME}
-                    WHERE task_name = %s
-                    FOR UPDATE
-                    """,
-                    (task_name,)
-                )
-                
-                row = cur.fetchone()
-                
-                if row is None:
-                    # Lease doesn't exist - create it
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    # Try to lock existing row
                     cur.execute(
                         f"""
-                        INSERT INTO {self.TABLE_NAME}
-                        (task_name, owner_id, acquired_at, expires_at, heartbeat_at)
-                        VALUES (%s, %s, %s, %s, %s)
+                        SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
+                        FROM {self.TABLE_NAME}
+                        WHERE task_name = %s
+                        FOR UPDATE
                         """,
-                        (task_name, owner_id, now, expires_at, now)
+                        (task_name,)
                     )
-                    conn.commit()
-                    
-                    lease = Lease(
-                        task_name=task_name,
-                        owner_id=owner_id,
-                        acquired_at=now,
-                        expires_at=expires_at,
-                        heartbeat_at=now,
-                    )
-                    logger.info(f"Acquired new lease for {task_name} by {owner_id}")
-                    return AcquisitionResult.acquired(lease)
-                
-                else:
-                    # Lease exists - check if available
-                    current_expires_at = row["expires_at"]
-                    current_owner = row["owner_id"]
-                    
-                    # Check if we already own it
-                    if current_owner == owner_id:
-                        # Renew our own lease
+
+                    row = cur.fetchone()
+
+                    if row is None:
+                        # Lease doesn't exist - create it
                         cur.execute(
                             f"""
-                            UPDATE {self.TABLE_NAME}
-                            SET expires_at = %s, heartbeat_at = %s
-                            WHERE task_name = %s
+                            INSERT INTO {self.TABLE_NAME}
+                            (task_name, owner_id, acquired_at, expires_at, heartbeat_at)
+                            VALUES (%s, %s, %s, %s, %s)
                             """,
-                            (expires_at, now, task_name)
+                            (task_name, owner_id, now, expires_at, now)
                         )
                         conn.commit()
-                        
-                        lease = Lease(
-                            task_name=task_name,
-                            owner_id=owner_id,
-                            acquired_at=row["acquired_at"],
-                            expires_at=expires_at,
-                            heartbeat_at=now,
-                        )
-                        logger.debug(f"Renewed lease for {task_name} by {owner_id}")
-                        return AcquisitionResult.acquired(lease)
-                    
-                    # Check if expired
-                    if current_expires_at <= now:
-                        # Take over expired lease
-                        cur.execute(
-                            f"""
-                            UPDATE {self.TABLE_NAME}
-                            SET owner_id = %s, acquired_at = %s, expires_at = %s, heartbeat_at = %s
-                            WHERE task_name = %s
-                            """,
-                            (owner_id, now, expires_at, now, task_name)
-                        )
-                        conn.commit()
-                        
+
                         lease = Lease(
                             task_name=task_name,
                             owner_id=owner_id,
@@ -176,26 +132,78 @@ class PostgresBackend(Backend):
                             expires_at=expires_at,
                             heartbeat_at=now,
                         )
-                        logger.info(
-                            f"Acquired expired lease for {task_name} "
-                            f"(was owned by {current_owner})"
-                        )
+                        logger.info(f"Acquired new lease for {task_name} by {owner_id}")
                         return AcquisitionResult.acquired(lease)
-                    
+
                     else:
-                        # Lease is held by another owner
-                        conn.rollback()
-                        time_remaining = (current_expires_at - now).total_seconds()
-                        reason = (
-                            f"Lease held by {current_owner}, "
-                            f"expires in {time_remaining:.1f}s"
-                        )
-                        logger.debug(f"Failed to acquire {task_name}: {reason}")
-                        return AcquisitionResult.failed(reason)
-        
+                        # Lease exists - check if available
+                        current_expires_at = row["expires_at"]
+                        current_owner = row["owner_id"]
+
+                        # Check if we already own it
+                        if current_owner == owner_id:
+                            # Renew our own lease
+                            cur.execute(
+                                f"""
+                                UPDATE {self.TABLE_NAME}
+                                SET expires_at = %s, heartbeat_at = %s
+                                WHERE task_name = %s
+                                """,
+                                (expires_at, now, task_name)
+                            )
+                            conn.commit()
+
+                            lease = Lease(
+                                task_name=task_name,
+                                owner_id=owner_id,
+                                acquired_at=row["acquired_at"],
+                                expires_at=expires_at,
+                                heartbeat_at=now,
+                            )
+                            logger.debug(f"Renewed lease for {task_name} by {owner_id}")
+                            return AcquisitionResult.acquired(lease)
+
+                        # Check if expired
+                        if current_expires_at <= now:
+                            # Take over expired lease
+                            cur.execute(
+                                f"""
+                                UPDATE {self.TABLE_NAME}
+                                SET owner_id = %s, acquired_at = %s, expires_at = %s, heartbeat_at = %s
+                                WHERE task_name = %s
+                                """,
+                                (owner_id, now, expires_at, now, task_name)
+                            )
+                            conn.commit()
+
+                            lease = Lease(
+                                task_name=task_name,
+                                owner_id=owner_id,
+                                acquired_at=now,
+                                expires_at=expires_at,
+                                heartbeat_at=now,
+                            )
+                            logger.info(
+                                f"Acquired expired lease for {task_name} "
+                                f"(was owned by {current_owner})"
+                            )
+                            return AcquisitionResult.acquired(lease)
+
+                        else:
+                            # Lease is held by another owner
+                            conn.rollback()
+                            time_remaining = (current_expires_at - now).total_seconds()
+                            reason = (
+                                f"Lease held by {current_owner}, "
+                                f"expires in {time_remaining:.1f}s"
+                            )
+                            logger.debug(f"Failed to acquire {task_name}: {reason}")
+                            return AcquisitionResult.failed(reason)
+
         except Exception as e:
-            if self._conn:
-                self._conn.rollback()
+            with self._lock:
+                if self._conn:
+                    self._conn.rollback()
             raise BackendError(f"Failed to acquire lease: {e}") from e
     
     def release(self, task_name: str, owner_id: str) -> bool:
@@ -205,28 +213,30 @@ class PostgresBackend(Backend):
         Only deletes the lease if the owner matches.
         """
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    DELETE FROM {self.TABLE_NAME}
-                    WHERE task_name = %s AND owner_id = %s
-                    """,
-                    (task_name, owner_id)
-                )
-                deleted = cur.rowcount > 0
-            conn.commit()
-            
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        DELETE FROM {self.TABLE_NAME}
+                        WHERE task_name = %s AND owner_id = %s
+                        """,
+                        (task_name, owner_id)
+                    )
+                    deleted = cur.rowcount > 0
+                conn.commit()
+
             if deleted:
                 logger.info(f"Released lease for {task_name} by {owner_id}")
             else:
                 logger.debug(f"No lease to release for {task_name} by {owner_id}")
-            
+
             return deleted
-        
+
         except Exception as e:
-            if self._conn:
-                self._conn.rollback()
+            with self._lock:
+                if self._conn:
+                    self._conn.rollback()
             raise BackendError(f"Failed to release lease: {e}") from e
     
     def heartbeat(self, task_name: str, owner_id: str, ttl: int) -> bool:
@@ -239,49 +249,52 @@ class PostgresBackend(Backend):
         expires_at = now + timedelta(seconds=ttl)
         
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {self.TABLE_NAME}
-                    SET expires_at = %s, heartbeat_at = %s
-                    WHERE task_name = %s AND owner_id = %s
-                    """,
-                    (expires_at, now, task_name, owner_id)
-                )
-                updated = cur.rowcount > 0
-            conn.commit()
-            
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        UPDATE {self.TABLE_NAME}
+                        SET expires_at = %s, heartbeat_at = %s
+                        WHERE task_name = %s AND owner_id = %s
+                        """,
+                        (expires_at, now, task_name, owner_id)
+                    )
+                    updated = cur.rowcount > 0
+                conn.commit()
+
             if updated:
                 logger.debug(f"Heartbeat successful for {task_name} by {owner_id}")
             else:
                 logger.warning(f"Heartbeat failed for {task_name} by {owner_id}")
-            
+
             return updated
-        
+
         except Exception as e:
-            if self._conn:
-                self._conn.rollback()
+            with self._lock:
+                if self._conn:
+                    self._conn.rollback()
             raise BackendError(f"Failed to send heartbeat: {e}") from e
     
     def get_lease(self, task_name: str) -> Optional[Lease]:
         """Get the current lease for a task."""
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
-                    FROM {self.TABLE_NAME}
-                    WHERE task_name = %s
-                    """,
-                    (task_name,)
-                )
-                row = cur.fetchone()
-            
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
+                        FROM {self.TABLE_NAME}
+                        WHERE task_name = %s
+                        """,
+                        (task_name,)
+                    )
+                    row = cur.fetchone()
+
             if row is None:
                 return None
-            
+
             return Lease(
                 task_name=row["task_name"],
                 owner_id=row["owner_id"],
@@ -289,12 +302,13 @@ class PostgresBackend(Backend):
                 expires_at=row["expires_at"],
                 heartbeat_at=row["heartbeat_at"],
             )
-        
+
         except Exception as e:
             raise BackendError(f"Failed to get lease: {e}") from e
     
     def close(self) -> None:
         """Close database connection."""
-        if self._conn and not self._conn.closed:
-            self._conn.close()
-            logger.debug("Closed PostgreSQL connection")
+        with self._lock:
+            if self._conn and not self._conn.closed:
+                self._conn.close()
+        logger.debug("Closed PostgreSQL connection")
