@@ -151,11 +151,15 @@ class HeartbeatManager:
                 success = self.backend.heartbeat(task_name, owner_id, ttl)
 
                 if not success:
-                    logger.error(
-                        f"Heartbeat failed for {task_name} - lease may have been lost"
+                    raise HeartbeatError(
+                        f"Heartbeat failed for {task_name}: lease no longer "
+                        f"owned by {owner_id} (stolen or expired)"
                     )
-                    failed = True
-                    break
+
+            except HeartbeatError as e:
+                logger.error(str(e))
+                failed = True
+                break
 
             except Exception as e:
                 logger.error(f"Heartbeat error for {task_name}: {e}")
