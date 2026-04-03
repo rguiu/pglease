@@ -194,17 +194,22 @@ class PostgresBackend(Backend):
     def _connection(self):
         """Acquire a DB connection, yield it, then commit or rollback.
 
-        When *pool_size > 1*: borrows a connection from the
-        ``ThreadedConnectionPool``, rolls back on error, and returns it to
-        the pool after the block regardless of success or failure.
+        On clean exit the connection is automatically committed, so callers
+        do **not** need to call ``conn.commit()`` themselves.  On exception
+        the transaction is rolled back before re-raising.
 
-        When *pool_size == 1*: acquires ``self._lock``, uses the single
-        persistent connection, and rolls back on error.
+        When *pool_size > 1*: borrows a connection from the
+        ``ThreadedConnectionPool`` and returns it to the pool after the
+        block regardless of success or failure.
+
+        When *pool_size == 1*: acquires ``self._lock`` and uses the single
+        persistent connection.
         """
         if self._pool is not None:
             conn = self._pool.getconn()
             try:
                 yield conn
+                conn.commit()
             except Exception:
                 try:
                     conn.rollback()
@@ -218,6 +223,7 @@ class PostgresBackend(Backend):
                 conn = self._get_connection()
                 try:
                     yield conn
+                    conn.commit()
                 except Exception:
                     try:
                         conn.rollback()
@@ -232,7 +238,6 @@ class PostgresBackend(Backend):
                 with conn.cursor() as cur:
                     cur.execute(self._sql_create_table)
                     cur.execute(self._sql_create_index)
-                conn.commit()
             logger.info(f"Initialized {self.TABLE_NAME} table")
         except BackendError:
             raise
@@ -268,7 +273,6 @@ class PostgresBackend(Backend):
                             self._sql_insert,
                             (task_name, owner_id, now, expires_at, now)
                         )
-                        conn.commit()
                         lease = Lease(
                             task_name=task_name,
                             owner_id=owner_id,
@@ -291,7 +295,6 @@ class PostgresBackend(Backend):
                                 self._sql_update_renew,
                                 (expires_at, now, task_name)
                             )
-                            conn.commit()
                             lease = Lease(
                                 task_name=task_name,
                                 owner_id=owner_id,
@@ -309,7 +312,6 @@ class PostgresBackend(Backend):
                                 self._sql_update_takeover,
                                 (owner_id, now, expires_at, now, task_name)
                             )
-                            conn.commit()
                             lease = Lease(
                                 task_name=task_name,
                                 owner_id=owner_id,
@@ -325,7 +327,6 @@ class PostgresBackend(Backend):
 
                         else:
                             # Lease is held by another owner
-                            conn.rollback()
                             time_remaining = (current_expires_at - now).total_seconds()
                             reason = f"Lease already held, expires in {time_remaining:.1f}s"
                             logger.debug(
@@ -350,7 +351,6 @@ class PostgresBackend(Backend):
                 with conn.cursor() as cur:
                     cur.execute(self._sql_delete, (task_name, owner_id))
                     deleted = cur.rowcount > 0
-                conn.commit()
 
             if deleted:
                 logger.info(f"Released lease for {task_name} by {owner_id}")
@@ -380,7 +380,6 @@ class PostgresBackend(Backend):
                 with conn.cursor() as cur:
                     cur.execute(self._sql_heartbeat, (expires_at, now, task_name, owner_id))
                     updated = cur.rowcount > 0
-                conn.commit()
 
             if updated:
                 logger.debug(f"Heartbeat successful for {task_name} by {owner_id}")
@@ -446,7 +445,6 @@ class PostgresBackend(Backend):
                 with conn.cursor() as cur:
                     cur.execute(self._sql_cleanup_expired, (now,))
                     deleted = cur.rowcount
-                conn.commit()
 
             if deleted:
                 logger.info(f"Cleaned up {deleted} expired lease(s)")
