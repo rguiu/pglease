@@ -18,7 +18,21 @@ class Lease:
     acquired_at: datetime
     expires_at: datetime
     heartbeat_at: datetime
-    
+
+    def __post_init__(self) -> None:
+        """Normalize all datetime fields to timezone-aware UTC.
+
+        Accepts naive datetimes (assumed UTC) for convenience when
+        constructing :class:`Lease` objects in tests or custom backends,
+        but always stores them as timezone-aware so that :meth:`is_expired`,
+        :meth:`time_remaining`, and :meth:`is_zombie` never raise
+        ``TypeError: can't compare offset-naive and offset-aware datetimes``.
+        """
+        for field_name in ("acquired_at", "expires_at", "heartbeat_at"):
+            dt: datetime = getattr(self, field_name)
+            if dt.tzinfo is None:
+                object.__setattr__(self, field_name, dt.replace(tzinfo=timezone.utc))
+
     def is_expired(self, now: Optional[datetime] = None) -> bool:
         """Check if the lease has expired."""
         if now is None:
