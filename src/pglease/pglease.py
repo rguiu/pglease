@@ -185,6 +185,27 @@ class PGLease:
             Current Lease if exists, None otherwise
         """
         return self.backend.get_lease(task_name)
+
+    def cleanup_expired(self) -> int:
+        """
+        Delete expired lease rows and return the number removed.
+
+        Expired leases accumulate over time when tasks are never re-acquired
+        after TTL expiry or when workers crash without calling ``release()``.
+        Call this periodically (e.g. once per hour) to prevent unbounded
+        table growth.
+
+        Returns:
+            Number of rows deleted.
+
+        Example — clean up at startup::
+
+            with PGLease(url) as pglease:
+                removed = pglease.cleanup_expired()
+                if removed:
+                    logging.info("Cleaned %d stale lease(s)", removed)
+        """
+        return self.backend.cleanup_expired()
     
     def singleton_task(
         self,

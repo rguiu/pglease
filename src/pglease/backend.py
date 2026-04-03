@@ -103,3 +103,15 @@ class Backend(ABC):
         Must be idempotent - safe to call multiple times.
         """
         pass
+
+    @abstractmethod
+    def cleanup_expired(self) -> int:
+        """
+        Delete all expired lease rows from the store.
+
+        Returns the number of rows removed.  Safe to call at any time —
+        active (non-expired) leases are never touched.  Recommended to run
+        periodically (e.g. every hour or via a cron job) to prevent the
+        lease table from growing without bound.
+        """
+        pass

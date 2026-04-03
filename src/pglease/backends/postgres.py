@@ -135,6 +135,11 @@ class PostgresBackend(Backend):
             WHERE task_name = %s
         """).format(_tbl)
 
+        self._sql_cleanup_expired = sql.SQL("""
+            DELETE FROM {}
+            WHERE expires_at < %s
+        """).format(_tbl)
+
         if auto_initialize:
             self.initialize()
     
@@ -348,6 +353,27 @@ class PostgresBackend(Backend):
 
         except Exception as e:
             raise BackendError(f"Failed to get lease: {_scrub_exc(e)}") from e
+
+    def cleanup_expired(self) -> int:
+        """Delete expired lease rows and return the number removed."""
+        now = datetime.now(timezone.utc)
+        try:
+            with self._lock:
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute(self._sql_cleanup_expired, (now,))
+                    deleted = cur.rowcount
+                conn.commit()
+
+            if deleted:
+                logger.info(f"Cleaned up {deleted} expired lease(s)")
+            return deleted
+
+        except Exception as e:
+            with self._lock:
+                if self._conn:
+                    self._conn.rollback()
+            raise BackendError(f"Failed to clean up expired leases: {_scrub_exc(e)}") from e
     
     def close(self) -> None:
         """Close database connection."""
