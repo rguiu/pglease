@@ -112,6 +112,11 @@ def _make_fake_backend(detector: ConcurrencyDetector, sleep_s: float = 0.01):
     backend._sql_delete = _sentinel
     backend._sql_heartbeat = _sentinel
     backend._sql_select = _sentinel
+    backend._sql_list = _sentinel
+    backend._sql_cleanup_expired = _sentinel
+    backend.connect_timeout = 10
+    backend._pool_size = 1
+    backend._pool = None
 
     return backend
 
