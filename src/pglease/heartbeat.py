@@ -88,6 +88,10 @@ class HeartbeatManager:
         Args:
             task_name: Task to stop heartbeat for
         """
+        # Signal the thread to stop, but do NOT hold self._lock while
+        # joining.  If the heartbeat thread's on_lease_lost callback calls
+        # pglease.close() or pglease.release(), those call stop() again,
+        # which would try to acquire self._lock — deadlock.
         with self._lock:
             if task_name not in self._threads:
                 return
@@ -97,12 +101,15 @@ class HeartbeatManager:
             if stop_event:
                 stop_event.set()
 
-            # Wait for thread to finish
             thread = self._threads.get(task_name)
-            if thread and thread.is_alive():
-                thread.join(timeout=1.0)
 
-            # Clean up
+        # Join outside the lock so on_lease_lost callbacks are free to
+        # call back into the coordinator without deadlocking.
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+
+        # Clean up after the thread has finished (or timed out).
+        with self._lock:
             self._threads.pop(task_name, None)
             self._stop_events.pop(task_name, None)
             self._callbacks.pop(task_name, None)
