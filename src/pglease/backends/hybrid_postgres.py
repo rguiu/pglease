@@ -133,15 +133,19 @@ class HybridPostgresBackend(PostgresBackend):
             return False
         
         try:
-            # Check if we're in the list of locks held by our session
+            # Check if we're in the list of locks held by our session.
+            # pg_try_advisory_lock(bigint) stores the 64-bit key split across
+            # classid (upper 32 bits) and objid (lower 32 bits), both as oid
+            # (unsigned 32-bit).  Querying only objid = %s is wrong for any
+            # lock_id whose upper 32 bits are non-zero.  Reconstruct the full
+            # 64-bit key for comparison instead.
             conn = self._get_connection()
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT COUNT(*) > 0
                     FROM pg_locks
                     WHERE locktype = 'advisory'
-                      AND classid = 0
-                      AND objid = %s
+                      AND (classid::bigint << 32) | objid::bigint = %s
                       AND pid = pg_backend_pid()
                 """, (lock_id,))
                 result = cur.fetchone()[0]
