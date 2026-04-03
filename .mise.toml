@@ -1,0 +1,6 @@
+# mise configuration for pglease project
+[tools]
+python = "3.11.7"
+
+[env]
+_.python.venv = { path = ".venv", create = false }

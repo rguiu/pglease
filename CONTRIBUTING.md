@@ -3,8 +3,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/yourusername/coor.git
-cd coor
+git clone https://github.com/yourusername/pglease.git
+cd pglease
 python -m venv venv
 source venv/bin/activate
 pip install -e ".[dev]"
@@ -13,17 +13,17 @@ pip install -e ".[dev]"
 docker run -d -p 5433:5432 \
   -e POSTGRES_USER=test \
   -e POSTGRES_PASSWORD=test \
-  -e POSTGRES_DB=coor_test \
+  -e POSTGRES_DB=pglease_test \
   postgres:14
 
-export TEST_POSTGRES_URL="postgresql://test:test@localhost:5433/coor_test"
+export TEST_POSTGRES_URL="postgresql://test:test@localhost:5433/pglease_test"
 ```
 
 ## Running Tests
 
 ```bash
 pytest
-pytest --cov=coor  # With coverage
+pytest --cov=pglease  # With coverage
 ```
 
 ## Code Style
@@ -36,7 +36,7 @@ mypy src/
 
 ## Adding a Backend
 
-Create a new file in `src/coor/backends/` and implement the `Backend` abstract class. Key requirement: operations must be atomic to prevent race conditions.
+Create a new file in `src/pglease/backends/` and implement the `Backend` abstract class. Key requirement: operations must be atomic to prevent race conditions.
 
 ```python
 from pglease.backend import Backend

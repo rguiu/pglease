@@ -7,7 +7,7 @@ for both fast failover and observability.
 
 import time
 import logging
-from pglease import Coordinator, HybridPostgresBackend
+from pglease import PGLease, HybridPostgresBackend
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,11 +27,11 @@ def example_fast_failover():
     
     # Use hybrid backend for fast failover
     backend = HybridPostgresBackend(POSTGRES_URL)
-    coordinator = Coordinator(backend, owner_id="worker-1")
+    pglease = PGLease(backend, owner_id="worker-1")
     
     try:
         # Acquire critical task
-        if coordinator.try_acquire("critical-task", ttl=60):
+        if pglease.try_acquire("critical-task", ttl=60):
             logger.info("✓ Acquired critical task")
             
             # Simulate long-running work
@@ -42,12 +42,12 @@ def example_fast_failover():
             # Another worker can acquire immediately (no TTL wait)
             
             logger.info("✓ Critical operation completed")
-            coordinator.release("critical-task")
+            pglease.release("critical-task")
         else:
             logger.info("✗ Task held by another worker")
     
     finally:
-        coordinator.close()
+        pglease.close()
 
 
 def example_connection_monitoring():
@@ -61,10 +61,10 @@ def example_connection_monitoring():
     print("="*60)
     
     backend = HybridPostgresBackend(POSTGRES_URL)
-    coordinator = Coordinator(backend, owner_id="worker-2")
+    pglease = PGLease(backend, owner_id="worker-2")
     
     try:
-        if coordinator.try_acquire("monitored-task", ttl=120):
+        if pglease.try_acquire("monitored-task", ttl=120):
             logger.info("✓ Task acquired with connection monitoring")
             
             # Heartbeat will verify:
@@ -76,10 +76,10 @@ def example_connection_monitoring():
             # If connection was lost, heartbeat would fail and task stops
             logger.info("✓ Connection healthy, task continuing")
             
-            coordinator.release("monitored-task")
+            pglease.release("monitored-task")
     
     finally:
-        coordinator.close()
+        pglease.close()
 
 
 def example_observability_with_speed():
@@ -90,10 +90,10 @@ def example_observability_with_speed():
     print("="*60)
     
     backend = HybridPostgresBackend(POSTGRES_URL)
-    coordinator = Coordinator(backend, owner_id="worker-3")
+    pglease = PGLease(backend, owner_id="worker-3")
     
     try:
-        if coordinator.try_acquire("observable-task", ttl=60):
+        if pglease.try_acquire("observable-task", ttl=60):
             logger.info("✓ Task acquired (hybrid mode)")
             
             # You get:
@@ -101,7 +101,7 @@ def example_observability_with_speed():
             # 2. Lease table entry (query for observability)
             
             # Query lease table for metadata
-            lease = coordinator.get_lease("observable-task")
+            lease = pglease.get_lease("observable-task")
             if lease:
                 logger.info(f"  Owner: {lease.owner_id}")
                 logger.info(f"  Acquired: {lease.acquired_at}")
@@ -109,11 +109,11 @@ def example_observability_with_speed():
                 logger.info(f"  Time remaining: {lease.time_remaining():.1f}s")
             
             time.sleep(3)
-            coordinator.release("observable-task")
+            pglease.release("observable-task")
             logger.info("✓ Task completed and released")
     
     finally:
-        coordinator.close()
+        pglease.close()
 
 
 def compare_backends():

@@ -1,14 +1,14 @@
 """Basic usage examples for pglease."""
 
 import time
-from pglease import Coordinator
+from pglease import PGLease
 
-coordinator = Coordinator("postgresql://user:password@localhost:5432/mydb")
+pglease = PGLease("postgresql://user:password@localhost:5432/mydb")
 
 
 # 1. Context Manager (recommended)
 def context_manager_example():
-    with coordinator.acquire("daily-report", ttl=60) as acquired:
+    with pglease.acquire("daily-report", ttl=60) as acquired:
         if acquired:
             print("Generating report...")
             time.sleep(2)
@@ -19,19 +19,19 @@ def context_manager_example():
 
 # 2. Explicit Control
 def explicit_control_example():
-    if coordinator.try_acquire("data-sync", ttl=120):
+    if pglease.try_acquire("data-sync", ttl=120):
         try:
             print("Syncing data...")
             time.sleep(2)
             print("Done")
         finally:
-            coordinator.release("data-sync")
+            pglease.release("data-sync")
     else:
         print("Another worker is syncing data")
 
 
 # 3. Decorator (simplest)
-@coordinator.singleton_task("cleanup-job", ttl=300)
+@pglease.singleton_task("cleanup-job", ttl=300)
 def cleanup_job():
     print("Running cleanup...")
     time.sleep(2)
@@ -46,4 +46,4 @@ if __name__ == "__main__":
         result = cleanup_job()
         print(f"Result: {result}")
     finally:
-        coordinator.close()
+        pglease.close()

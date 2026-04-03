@@ -8,32 +8,32 @@ import time
 import logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
-from pglease import Coordinator
+from pglease import PGLease
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize coordinator
+# Initialize pglease
 POSTGRES_URL = "postgresql://user:password@localhost:5432/mydb"
-coordinator = Coordinator(POSTGRES_URL)
+pglease = PGLease(POSTGRES_URL)
 
 # Initialize scheduler
 scheduler = BackgroundScheduler()
 
 
-@coordinator.singleton_task("hourly-cleanup", ttl=300)
+@pglease.singleton_task("hourly-cleanup", ttl=300)
 def hourly_cleanup():
     """
     Cleanup task that runs every hour, but only on one worker.
     
-    All workers schedule this task, but Coor ensures only one executes.
+    All workers schedule this task, but pglease ensures only one executes.
     """
     logger.info("Running hourly cleanup...")
     time.sleep(5)  # Simulate cleanup work
     logger.info("Hourly cleanup completed")
 
 
-@coordinator.singleton_task("daily-report", ttl=600)
+@pglease.singleton_task("daily-report", ttl=600)
 def daily_report():
     """
     Generate daily report.

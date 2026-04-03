@@ -8,9 +8,9 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
-from .backend import Backend
-from .exceptions import BackendError
-from .models import Lease, AcquisitionResult
+from ..backend import Backend
+from ..exceptions import BackendError
+from ..models import Lease, AcquisitionResult
 
 logger = logging.getLogger(__name__)
 

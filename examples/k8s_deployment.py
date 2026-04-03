@@ -1,7 +1,7 @@
 """
 Example Kubernetes Deployment
 
-This example shows how to deploy an application using Coor for coordination
+This example shows how to deploy an application using pglease for coordination
 across multiple pods.
 """
 

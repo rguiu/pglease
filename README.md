@@ -9,33 +9,33 @@ You have multiple replicas of your application running (Kubernetes pods, for exa
 ## Installation
 
 ```bash
-pip install coor
+pip install pglease
 ```
 
 ## Usage
 
 ```python
-from coor import Coordinator
+from pglease import PGLease
 
-coordinator = Coordinator("postgresql://user:pass@localhost/db")
+pglease = PGLease("postgresql://user:pass@localhost/db")
 
 # Context manager (recommended)
-with coordinator.acquire("my-task", ttl=60) as acquired:
+with pglease.acquire("my-task", ttl=60) as acquired:
     if acquired:
         run_migration()
 
 # Decorator
-@coordinator.singleton_task("cleanup", ttl=300)
+@pglease.singleton_task("cleanup", ttl=300)
 def cleanup_old_data():
     # Only one worker executes this
     pass
 
 # Explicit control
-if coordinator.try_acquire("sync-job", ttl=120):
+if pglease.try_acquire("sync-job", ttl=120):
     try:
         sync_data()
     finally:
-        coordinator.release("sync-job")
+        pglease.release("sync-job")
 ```
 
 ## How It Works
@@ -51,7 +51,7 @@ If a worker crashes, its lease expires (TTL) and another worker can take over.
 Uses a lease table for coordination. Gives you observability and rich metadata.
 
 ```sql
-CREATE TABLE coor_leases (
+CREATE TABLE pglease_leases (
     task_name VARCHAR(255) PRIMARY KEY,
     owner_id VARCHAR(255) NOT NULL,
     acquired_at TIMESTAMP NOT NULL,
@@ -64,7 +64,7 @@ You can query this table to see who's holding what:
 
 ```sql
 SELECT task_name, owner_id, expires_at - NOW() as remaining
-FROM coor_leases WHERE expires_at > NOW();
+FROM pglease_leases WHERE expires_at > NOW();
 ```
 
 **Trade-off:** If a worker crashes, others wait for TTL to expire (10-30s typically). This is fine for most use cases like migrations or hourly jobs.
@@ -74,10 +74,10 @@ FROM coor_leases WHERE expires_at > NOW();
 Combines PostgreSQL advisory locks with the lease table. Advisory locks give you instant failover (<1s) when a worker crashes, while the lease table gives you observability.
 
 ```python
-from coor import Coordinator, HybridPostgresBackend
+from pglease import PGLease, HybridPostgresBackend
 
 backend = HybridPostgresBackend("postgresql://user:pass@localhost/db")
-coordinator = Coordinator(backend)
+pglease = PGLease(backend)
 ```
 
 Use this when you need fast recovery and can't wait for TTL expiry.
@@ -85,7 +85,7 @@ Use this when you need fast recovery and can't wait for TTL expiry.
 ## Configuration
 
 ```python
-coordinator = Coordinator(
+pglease = PGLease(
     "postgresql://user:pass@localhost/db",
     owner_id="pod-xyz-123",      # Auto-generated if not provided
     heartbeat_interval=10,        # Heartbeat every 10 seconds
@@ -96,7 +96,7 @@ In Kubernetes, use the pod name as owner_id:
 
 ```python
 import os
-coordinator = Coordinator(
+pglease = PGLease(
     os.environ["DATABASE_URL"],
     owner_id=os.environ.get("HOSTNAME")
 )

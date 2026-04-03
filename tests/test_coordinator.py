@@ -5,7 +5,7 @@ import pytest
 import time
 from unittest.mock import Mock, patch
 
-from pglease import Coordinator
+from pglease import PGLease
 from pglease.exceptions import AcquisitionError
 
 
@@ -22,7 +22,7 @@ def coordinator():
     if not POSTGRES_URL:
         pytest.skip("TEST_POSTGRES_URL not set")
     
-    coord = Coordinator(POSTGRES_URL, owner_id="test-worker")
+    coord = PGLease(POSTGRES_URL, owner_id="test-worker")
     yield coord
     
     # Clean up
@@ -34,13 +34,13 @@ class TestCoordinator:
     
     def test_initialization(self):
         """Test coordinator initialization."""
-        coord = Coordinator(POSTGRES_URL, owner_id="test-worker")
+        coord = PGLease(POSTGRES_URL, owner_id="test-worker")
         assert coord.owner_id == "test-worker"
         coord.close()
     
     def test_auto_owner_id(self):
         """Test automatic owner ID generation."""
-        coord = Coordinator(POSTGRES_URL)
+        coord = PGLease(POSTGRES_URL)
         assert coord.owner_id is not None
         assert len(coord.owner_id) > 0
         coord.close()
@@ -60,7 +60,7 @@ class TestCoordinator:
         assert success1
         
         # Second coordinator tries to acquire
-        coord2 = Coordinator(POSTGRES_URL, owner_id="worker-2")
+        coord2 = PGLease(POSTGRES_URL, owner_id="worker-2")
         success2 = coord2.try_acquire("test-task", ttl=60)
         assert not success2
         
@@ -99,7 +99,7 @@ class TestCoordinator:
         coordinator.try_acquire("test-task", ttl=60)
         
         # Second worker tries with context manager
-        coord2 = Coordinator(POSTGRES_URL, owner_id="worker-2")
+        coord2 = PGLease(POSTGRES_URL, owner_id="worker-2")
         executed = False
         
         with coord2.acquire("test-task", ttl=60) as acquired:
@@ -118,7 +118,7 @@ class TestCoordinator:
         coordinator.try_acquire("test-task", ttl=60)
         
         # Second worker tries with wait=True
-        coord2 = Coordinator(POSTGRES_URL, owner_id="worker-2")
+        coord2 = PGLease(POSTGRES_URL, owner_id="worker-2")
         
         with pytest.raises(AcquisitionError):
             with coord2.acquire("test-task", ttl=60, wait=True):
@@ -152,7 +152,7 @@ class TestCoordinator:
         coordinator.try_acquire("test-task", ttl=60)
         
         # Try to run decorated function
-        coord2 = Coordinator(POSTGRES_URL, owner_id="worker-2")
+        coord2 = PGLease(POSTGRES_URL, owner_id="worker-2")
         executed = False
         
         @coord2.singleton_task("test-task", ttl=60)
@@ -174,7 +174,7 @@ class TestCoordinator:
         coordinator.try_acquire("test-task", ttl=60)
         
         # Try to run decorated function
-        coord2 = Coordinator(POSTGRES_URL, owner_id="worker-2")
+        coord2 = PGLease(POSTGRES_URL, owner_id="worker-2")
         
         @coord2.singleton_task("test-task", ttl=60, skip_if_locked=False)
         def task():

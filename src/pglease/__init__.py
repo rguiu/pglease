@@ -4,7 +4,7 @@ pglease - Distributed Task Coordination Library
 A lightweight coordination library for singleton task execution across distributed systems.
 """
 
-from .coordinator import Coordinator
+from .coordinator import PGLease
 from .exceptions import (
     PgleaseError,
     AcquisitionError,
@@ -17,10 +17,10 @@ from .backends import PostgresBackend, HybridPostgresBackend
 
 __version__ = "0.1.0"
 __all__ = [
-    "Coordinator",
+    "PGLease",
     "Lease",
     "AcquisitionResult",
-    "CoorError",
+    "PgleaseError",
     "AcquisitionError",
     "ReleaseError",
     "BackendError",

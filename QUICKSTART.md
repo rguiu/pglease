@@ -3,7 +3,7 @@
 ## Install
 
 ```bash
-pip install coor
+pip install pglease
 ```
 
 ## Basic Usage

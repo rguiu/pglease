@@ -3,7 +3,7 @@
 import os
 import time
 import logging
-from pglease import Coordinator
+from pglease import PGLease
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,10 +12,10 @@ logger = logging.getLogger(__name__)
 POSTGRES_URL = os.environ.get("DATABASE_URL", "postgresql://user:pass@postgres:5432/mydb")
 POD_NAME = os.environ.get("HOSTNAME", "unknown-pod")
 
-coordinator = Coordinator(POSTGRES_URL, owner_id=POD_NAME, heartbeat_interval=10)
+pglease = PGLease(POSTGRES_URL, owner_id=POD_NAME, heartbeat_interval=10)
 
 
-@coordinator.singleton_task("database-migration", ttl=300)
+@pglease.singleton_task("database-migration", ttl=300)
 def run_database_migration():
     """Run on startup - only one pod executes."""
     logger.info("Starting database migration...")
@@ -23,7 +23,7 @@ def run_database_migration():
     logger.info("Migration completed")
 
 
-@coordinator.singleton_task("hourly-aggregation", ttl=600)
+@pglease.singleton_task("hourly-aggregation", ttl=600)
 def hourly_aggregation():
     """Scheduled by cron in each pod, but only one executes."""
     logger.info("Starting hourly aggregation...")
@@ -35,13 +35,13 @@ def process_queue_item(item_id):
     """Process queue items with distributed locking."""
     task_name = f"queue-item-{item_id}"
     
-    if coordinator.try_acquire(task_name, ttl=300):
+    if pglease.try_acquire(task_name, ttl=300):
         try:
             logger.info(f"Processing item {item_id}...")
             time.sleep(2)
             logger.info(f"Completed item {item_id}")
         finally:
-            coordinator.release(task_name)
+            pglease.release(task_name)
     else:
         logger.info(f"Item {item_id} being processed by another worker")
 
@@ -64,4 +64,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
-        coordinator.close()
+        pglease.close()

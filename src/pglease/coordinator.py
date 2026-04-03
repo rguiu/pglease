@@ -1,4 +1,4 @@
-"""Main Coordinator class for distributed task coordination."""
+"""Main PGLease class for distributed task coordination."""
 
 import functools
 import logging
@@ -17,14 +17,14 @@ logger = logging.getLogger(__name__)
 F = TypeVar("F", bound=Callable)
 
 
-class Coordinator:
+class PGLease:
     """
     Main API for distributed task coordination.
     
     Provides multiple ways to coordinate task execution:
-    - Context manager: `with coordinator.acquire(...)`
-    - Explicit control: `coordinator.try_acquire(...)` + `coordinator.release(...)`
-    - Decorator: `@coordinator.singleton_task(...)`
+    - Context manager: `with pglease.acquire(...)`
+    - Explicit control: `pglease.try_acquire(...)` + `pglease.release(...)`
+    - Decorator: `@pglease.singleton_task(...)`
     """
     
     def __init__(
@@ -59,7 +59,7 @@ class Coordinator:
         # Track active leases for cleanup
         self._active_leases: set[str] = set()
         
-        logger.info(f"Initialized coordinator with owner_id={self.owner_id}")
+        logger.info(f"Initialized PGLease with owner_id={self.owner_id}")
     
     @staticmethod
     def _generate_owner_id() -> str:
@@ -221,8 +221,8 @@ class Coordinator:
         # Close backend
         self.backend.close()
     
-    def __enter__(self) -> "Coordinator":
-        """Support using Coordinator as a context manager."""
+    def __enter__(self) -> "PGLease":
+        """Support using PGLease as a context manager."""
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -239,7 +239,7 @@ class LeaseContext:
     
     def __init__(
         self,
-        coordinator: Coordinator,
+        coordinator: PGLease,
         task_name: str,
         ttl: int,
         wait: bool,
