@@ -111,9 +111,9 @@ class PostgresBackend(Backend):
             CREATE TABLE IF NOT EXISTS {} (
                 task_name    VARCHAR(255) PRIMARY KEY,
                 owner_id     VARCHAR(255) NOT NULL,
-                acquired_at  TIMESTAMP    NOT NULL,
-                expires_at   TIMESTAMP    NOT NULL,
-                heartbeat_at TIMESTAMP    NOT NULL
+                acquired_at  TIMESTAMPTZ  NOT NULL,
+                expires_at   TIMESTAMPTZ  NOT NULL,
+                heartbeat_at TIMESTAMPTZ  NOT NULL
             )
         """).format(_tbl)
 
