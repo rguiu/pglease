@@ -37,7 +37,7 @@ class HeartbeatManager:
         self._threads: Dict[str, threading.Thread] = {}
         self._stop_events: Dict[str, threading.Event] = {}
         self._callbacks: Dict[str, Optional[Callable[[str], None]]] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # RLock: re-entrant so start() can call stop() while holding the lock
 
     def start(
         self,
