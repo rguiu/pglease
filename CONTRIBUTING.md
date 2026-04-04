@@ -25,8 +25,9 @@ git commit -m "feat!: change acquire() return type"
 ### Workflow:
 1. Make changes
 2. Commit with conventional message
-3. Push to main
-4. GitHub Actions automatically:
+3. Push your branch to GitHub
+4. Open a pull request
+5. After the pull request is merged to `main`, GitHub Actions automatically:
    - Calculates new version
    - Updates version files
    - Creates tag
