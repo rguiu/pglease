@@ -4,9 +4,9 @@
 
 Ensures singleton execution of tasks across multiple workers, pods, or processes. Simple, reliable, and production-ready.
 
-[![PyPI](https://img.shields.io/pypi/v/pglease.svg)](https://pypi.org/project/pglease/)
-[![Python](https://img.shields.io/pypi/pyversions/pglease.svg)](https://pypi.org/project/pglease/)
-[![License](https://img.shields.io/pypi/l/pglease.svg)](https://github.com/rguiu/pglease/blob/main/LICENSE)
+[![PyPI](https://img.shields.io/badge/pypi-v0.1.0-blue.svg)](https://test.pypi.org/project/pglease/)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://pypi.org/project/pglease/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/rguiu/pglease/blob/main/LICENSE)
 
 ## Why pglease?
 
