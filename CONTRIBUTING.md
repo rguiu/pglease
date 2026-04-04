@@ -20,6 +20,7 @@ convention is encouraged for a clean `git log`.
 |---|---|---|
 | `fix:` | Patch (0.1.0 → 0.1.1) | `fix: resolve race condition in release()` |
 | `perf:` | Patch (0.1.0 → 0.1.1) | `perf: reduce lock contention in heartbeat` |
+| `ci:` | Patch (0.1.0 → 0.1.1) | `ci: switch to setuptools-scm versioning` |
 | `feat:` | Minor (0.1.0 → 0.2.0) | `feat: add get_zombie_threads() method` |
 | `feat!:` / `fix!:` / `BREAKING CHANGE:` | Major (0.1.0 → 1.0.0) | `feat!: change acquire() return type` |
 
@@ -105,13 +106,13 @@ Fork, branch, code, test, commit, push, PR. Keep changes focused and add tests.
 | `fix:` | Patch (0.1.1) | Bug fixes |
 | `feat:` | Minor (0.2.0) | New features |
 | `perf:` | Patch (0.1.1) | Performance improvements |
+| `ci:` | Patch (0.1.1) | CI/CD configuration changes |
 | `BREAKING CHANGE` | Major (1.0.0) | Breaking API changes |
 | `chore:` | None | Maintenance, dependencies |
 | `docs:` | None | Documentation only |
 | `style:` | None | Formatting (no code change) |
 | `refactor:` | None | Code restructure (no feature change) |
 | `test:` | None | Adding/fixing tests |
-| `ci:` | None | CI/CD configuration |
 
 ### Detailed Examples
 
