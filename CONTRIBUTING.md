@@ -12,6 +12,7 @@ This project uses **Conventional Commits** for automatic semantic versioning.
 ### Types determine version bump:
 
 - `fix:` → Patch (0.1.0 → 0.1.1) - Bug fixes
+- `perf:` → Patch (0.1.0 → 0.1.1) - Performance improvements
 - `feat:` → Minor (0.1.0 → 0.2.0) - New features
 - `BREAKING CHANGE:` or `!` → Major (0.1.0 → 1.0.0) - Breaking changes
 
