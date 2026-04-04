@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  # Trigger when you push to main with commits that should trigger a release
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    name: Create Release and Publish
+    runs-on: ubuntu-latest
+    
+    # Only run if commit messages indicate a release
+    # (contains 'feat:', 'fix:', or 'BREAKING CHANGE:')
+    if: |
+      contains(github.event.head_commit.message, 'feat:') ||
+      contains(github.event.head_commit.message, 'fix:') ||
+      contains(github.event.head_commit.message, 'BREAKING CHANGE:') ||
+      contains(github.event.head_commit.message, 'perf:')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for version calculation
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine python-semantic-release
+      
+      - name: Calculate next version
+        id: version
+        run: |
+          # Get current version from pyproject.toml
+          CURRENT=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          
+          # Determine bump type from commit messages
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          
+          if [[ "$COMMIT_MSG" == *"BREAKING CHANGE:"* ]] || [[ "$COMMIT_MSG" == *"!"* ]]; then
+            BUMP="major"
+          elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
+            BUMP="minor"
+          elif [[ "$COMMIT_MSG" == *"fix:"* ]] || [[ "$COMMIT_MSG" == *"perf:"* ]]; then
+            BUMP="patch"
+          else
+            echo "No version bump needed"
+            exit 0
+          fi
+          
+          echo "bump=$BUMP" >> $GITHUB_OUTPUT
+          
+          # Calculate new version
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+          
+          case $BUMP in
+            major)
+              NEW_VERSION="$((major + 1)).0.0"
+              ;;
+            minor)
+              NEW_VERSION="${major}.$((minor + 1)).0"
+              ;;
+            patch)
+              NEW_VERSION="${major}.${minor}.$((patch + 1))"
+              ;;
+          esac
+          
+          echo "new=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Version bump: $CURRENT → $NEW_VERSION ($BUMP)"
+      
+      - name: Update version in files
+        if: steps.version.outputs.new != ''
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new }}"
+          
+          # Update pyproject.toml
+          sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" pyproject.toml
+          
+          # Update __init__.py
+          sed -i "s/__version__ = .*/__version__ = \"$NEW_VERSION\"/" src/pglease/__init__.py
+          
+          echo "✅ Updated version to $NEW_VERSION"
+      
+      - name: Commit version bump
+        if: steps.version.outputs.new != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml src/pglease/__init__.py
+          git commit -m "chore: bump version to ${{ steps.version.outputs.new }}"
+          git push
+      
+      - name: Create tag
+        if: steps.version.outputs.new != ''
+        run: |
+          git tag -a "v${{ steps.version.outputs.new }}" -m "Release v${{ steps.version.outputs.new }}"
+          git push origin "v${{ steps.version.outputs.new }}"
+      
+      - name: Build package
+        if: steps.version.outputs.new != ''
+        run: python -m build
+      
+      - name: Publish to Test PyPI
+        if: steps.version.outputs.new != ''
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          twine upload --repository testpypi dist/* || echo "⚠️ Test PyPI upload failed (might already exist)"
+      
+      - name: Create GitHub Release (as draft)
+        if: steps.version.outputs.new != ''
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.new }}
+          name: Release v${{ steps.version.outputs.new }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          files: dist/*
+          body: |
+            ## 🧪 Published to Test PyPI
+            
+            **Test installation:**
+            ```bash
+            pip install --index-url https://test.pypi.org/simple/ --no-deps pglease==${{ steps.version.outputs.new }}
+            ```
+            
+            **After testing succeeds, publish to production:**
+            1. Go to Actions → "Publish to Production PyPI"
+            2. Click "Run workflow"
+            3. Enter version tag: `v${{ steps.version.outputs.new }}`
+            4. Enter confirmation: `publish`
+            5. Click "Run workflow"

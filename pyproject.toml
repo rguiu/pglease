@@ -5,24 +5,41 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pglease"
 version = "0.1.0"
-description = "Lightweight distributed task coordination library"
+description = "Distributed task coordination using PostgreSQL - ensures singleton execution across multiple workers/pods"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
-    {name = "Raul Guiu Gallardo"}
+    {name = "Raul Guiu Gallardo", email = "raulguiu@gmail.com"}
 ]
-keywords = ["distributed", "coordination", "locking", "singleton", "kubernetes"]
+keywords = [
+    "distributed",
+    "coordination",
+    "locking",
+    "singleton",
+    "kubernetes",
+    "postgresql",
+    "postgres",
+    "task-scheduling",
+    "leader-election",
+    "distributed-systems",
+    "cluster",
+    "concurrency"
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Framework :: AsyncIO",
 ]
 dependencies = [
     "psycopg2-binary>=2.9.0",
