@@ -49,8 +49,13 @@ jobs:
       - name: Calculate next version
         id: version
         run: |
-          # Get current version from pyproject.toml
-          CURRENT=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
+          # Get current version from latest git tag (setuptools-scm, no version in pyproject.toml)
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
+          if [[ -n "$LATEST_TAG" ]]; then
+            CURRENT=$(echo "$LATEST_TAG" | sed 's/^v//')
+          else
+            CURRENT="0.0.0"
+          fi
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
           
           # Determine bump type from PR title
