@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   release:
@@ -22,8 +23,10 @@ jobs:
       (startsWith(github.event.pull_request.title, 'feat:') ||
        startsWith(github.event.pull_request.title, 'fix:') ||
        startsWith(github.event.pull_request.title, 'perf:') ||
-       contains(github.event.pull_request.title, 'BREAKING CHANGE:') ||
-       contains(github.event.pull_request.title, '!:'))
+       startsWith(github.event.pull_request.title, 'feat!:') ||
+       startsWith(github.event.pull_request.title, 'fix!:') ||
+       startsWith(github.event.pull_request.title, 'perf!:') ||
+       contains(github.event.pull_request.title, 'BREAKING CHANGE:'))
     
     steps:
       - name: Checkout code
@@ -53,7 +56,9 @@ jobs:
           PR_TITLE="${{ github.event.pull_request.title }}"
           
           # Breaking change: explicit prefix OR type!: / type(scope)!: syntax only
-          if [[ "$PR_TITLE" == *"BREAKING CHANGE:"* ]] || [[ "$PR_TITLE" =~ ^[a-zA-Z]+(\([^)]*\))?!: ]]; then
+          # Store regex in variable to avoid bash inline-parsing issues with parens
+          BREAKING_RE='^[a-zA-Z]+(\([^)]*\))?!:'
+          if [[ "$PR_TITLE" == *"BREAKING CHANGE:"* ]] || [[ "$PR_TITLE" =~ $BREAKING_RE ]]; then
             BUMP="major"
           elif [[ "$PR_TITLE" == feat:* ]]; then
             BUMP="minor"
