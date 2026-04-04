@@ -6,7 +6,7 @@ Ensures singleton execution of tasks across multiple workers, pods, or processes
 
 [![PyPI](https://img.shields.io/pypi/v/pglease.svg)](https://pypi.org/project/pglease/)
 [![Python](https://img.shields.io/pypi/pyversions/pglease.svg)](https://pypi.org/project/pglease/)
-[![License](https://img.shields.io/pypi/l/pglease.svg)](https://github.com/rguiu/pglease/blob/master/LICENSE)
+[![License](https://img.shields.io/pypi/l/pglease.svg)](https://github.com/rguiu/pglease/blob/main/LICENSE)
 
 ## Why pglease?
 
