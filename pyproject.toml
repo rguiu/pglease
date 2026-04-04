@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pglease"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Distributed task coordination using PostgreSQL - ensures singleton execution across multiple workers/pods"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -52,6 +52,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "ruff>=0.9.0",  # linter + formatter (replaces black + isort + flake8)
     "mypy>=1.0.0",
+    "setuptools-scm>=8.0",  # dynamic versioning from git tags
 ]
 
 [project.urls]
@@ -60,6 +61,12 @@ Repository = "https://github.com/yourusername/pglease"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools_scm]
+# Version is derived from git tags (e.g. v0.2.0 → 0.2.0).
+# No version stored in source files — the tag IS the version.
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
 
 # ---------------------------------------------------------------------------
 # Ruff — linter + formatter
