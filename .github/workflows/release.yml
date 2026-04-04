@@ -52,7 +52,8 @@ jobs:
           # Determine bump type from PR title
           PR_TITLE="${{ github.event.pull_request.title }}"
           
-          if [[ "$PR_TITLE" == *"BREAKING CHANGE:"* ]] || [[ "$PR_TITLE" == *"!"* ]]; then
+          # Breaking change: explicit prefix OR type!: / type(scope)!: syntax only
+          if [[ "$PR_TITLE" == *"BREAKING CHANGE:"* ]] || [[ "$PR_TITLE" =~ ^[a-zA-Z]+(\([^)]*\))?!: ]]; then
             BUMP="major"
           elif [[ "$PR_TITLE" == feat:* ]]; then
             BUMP="minor"

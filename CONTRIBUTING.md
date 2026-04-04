@@ -1,39 +1,41 @@
 # Contributing
 
-## Commit Message Convention
+## PR Title Convention
 
-This project uses **Conventional Commits** for automatic semantic versioning.
+This project uses **Conventional Commits** format for **PR titles**. The release
+automation reads the PR title (not individual commit messages) to determine the
+next version bump.
 
-### Format
+Commit messages within the branch are free-form, but following the same
+convention is encouraged for a clean `git log`.
+
+### PR Title Format
 ```
-<type>: <description>
+<type>[!]: <description>
 ```
 
-### Types determine version bump:
+### Types and version bumps:
 
-- `fix:` → Patch (0.1.0 → 0.1.1) - Bug fixes
-- `perf:` → Patch (0.1.0 → 0.1.1) - Performance improvements
-- `feat:` → Minor (0.1.0 → 0.2.0) - New features
-- `BREAKING CHANGE:` or `!` → Major (0.1.0 → 1.0.0) - Breaking changes
+| PR title prefix | Bump | Example |
+|---|---|---|
+| `fix:` | Patch (0.1.0 → 0.1.1) | `fix: resolve race condition in release()` |
+| `perf:` | Patch (0.1.0 → 0.1.1) | `perf: reduce lock contention in heartbeat` |
+| `feat:` | Minor (0.1.0 → 0.2.0) | `feat: add get_zombie_threads() method` |
+| `feat!:` / `fix!:` / `BREAKING CHANGE:` | Major (0.1.0 → 1.0.0) | `feat!: change acquire() return type` |
 
-### Examples:
-```bash
-git commit -m "fix: resolve race condition in release() method"
-git commit -m "feat: add get_zombie_threads() monitoring method"
-git commit -m "feat!: change acquire() return type"
-```
+The `!` must appear **immediately before the colon** (e.g. `feat!:`) to signal a
+breaking change. An exclamation mark elsewhere in the title is ignored.
 
 ### Workflow:
-1. Make changes
-2. Commit with conventional message
-3. Push your branch to GitHub
-4. Open a pull request
-5. After the pull request is merged to `main`, GitHub Actions automatically:
-   - Calculates new version
+1. Create a feature branch: `git checkout -b feat/my-feature`
+2. Make changes and commit (any message format)
+3. Push branch and open a PR with a conventional title
+4. Merge the PR to `main` — GitHub Actions automatically:
+   - Calculates new version from the PR title
    - Updates version files
    - Creates tag
    - Publishes to Test PyPI
-   - Creates GitHub Release
+   - Creates GitHub Release draft
 
 See full guide below for details.
 
