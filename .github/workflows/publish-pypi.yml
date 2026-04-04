@@ -3,10 +3,6 @@ name: Publish to Production PyPI
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version tag to publish (e.g., v0.2.0)'
-        required: true
-        type: string
       confirm:
         description: 'Type "publish" to confirm'
         required: true
@@ -30,16 +26,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.version }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
-      - name: Verify version tag exists
+      - name: Verify a version tag is selected
         run: |
-          if ! git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
-            echo "Tag ${{ inputs.version }} does not exist"
+          if [[ "${{ github.ref_name }}" != v* ]]; then
+            echo "You must select a version tag (e.g. v0.2.0), not a branch"
             exit 1
           fi
-          echo "Publishing version ${{ inputs.version }} to PyPI"
+          echo "Publishing ${{ github.ref_name }} to PyPI"
 
       - name: Set up Python
         uses: actions/setup-python@v5
