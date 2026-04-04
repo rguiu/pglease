@@ -50,7 +50,7 @@ jobs:
         id: version
         run: |
           # Get current version from latest git tag (setuptools-scm, no version in pyproject.toml)
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null) || true
           if [[ -n "$LATEST_TAG" ]]; then
             CURRENT=$(echo "$LATEST_TAG" | sed 's/^v//')
           else
