@@ -16,7 +16,12 @@ from .exceptions import (
 from .models import AcquisitionResult, Lease
 from .pglease import PGLease
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version, PackageNotFoundError
+
+    __version__ = version("pglease")
+except PackageNotFoundError:  # running from source without installation
+    __version__ = "0.0.0.dev0"
 __all__ = [
     "PGLease",
     "AsyncPGLease",

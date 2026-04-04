@@ -23,6 +23,7 @@ jobs:
       (startsWith(github.event.pull_request.title, 'feat:') ||
        startsWith(github.event.pull_request.title, 'fix:') ||
        startsWith(github.event.pull_request.title, 'perf:') ||
+       startsWith(github.event.pull_request.title, 'ci:') ||
        startsWith(github.event.pull_request.title, 'feat!:') ||
        startsWith(github.event.pull_request.title, 'fix!:') ||
        startsWith(github.event.pull_request.title, 'perf!:') ||
@@ -62,7 +63,7 @@ jobs:
             BUMP="major"
           elif [[ "$PR_TITLE" == feat:* ]]; then
             BUMP="minor"
-          elif [[ "$PR_TITLE" == fix:* ]] || [[ "$PR_TITLE" == perf:* ]]; then
+          elif [[ "$PR_TITLE" == fix:* ]] || [[ "$PR_TITLE" == perf:* ]] || [[ "$PR_TITLE" == ci:* ]]; then
             BUMP="patch"
           else
             echo "No version bump needed"
@@ -90,31 +91,11 @@ jobs:
           echo "📦 Version bump: $CURRENT → $NEW_VERSION ($BUMP)"
           echo "📝 From PR: $PR_TITLE"
       
-      - name: Update version in files
-        if: steps.version.outputs.new != ''
-        run: |
-          NEW_VERSION="${{ steps.version.outputs.new }}"
-          
-          # Update pyproject.toml
-          sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" pyproject.toml
-          
-          # Update __init__.py
-          sed -i "s/__version__ = .*/__version__ = \"$NEW_VERSION\"/" src/pglease/__init__.py
-          
-          echo "✅ Updated version to $NEW_VERSION"
-      
-      - name: Commit version bump
+      - name: Create tag
         if: steps.version.outputs.new != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml src/pglease/__init__.py
-          git commit -m "chore: bump version to ${{ steps.version.outputs.new }} [skip ci]"
-          git push origin main
-      
-      - name: Create tag
-        if: steps.version.outputs.new != ''
-        run: |
           git tag -a "v${{ steps.version.outputs.new }}" -m "Release v${{ steps.version.outputs.new }}"
           git push origin "v${{ steps.version.outputs.new }}"
       
