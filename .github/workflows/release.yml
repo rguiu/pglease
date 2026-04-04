@@ -1,29 +1,36 @@
 name: Release
 
 on:
-  # Trigger when you push to main with commits that should trigger a release
-  push:
+  # Trigger when PR is merged to main
+  pull_request:
+    types: [closed]
     branches:
       - main
+
+permissions:
+  contents: write
 
 jobs:
   release:
     name: Create Release and Publish
     runs-on: ubuntu-latest
     
-    # Only run if commit messages indicate a release
-    # (contains 'feat:', 'fix:', or 'BREAKING CHANGE:')
+    # Only run if PR was actually merged (not just closed)
+    # AND PR title follows conventional commit format
     if: |
-      contains(github.event.head_commit.message, 'feat:') ||
-      contains(github.event.head_commit.message, 'fix:') ||
-      contains(github.event.head_commit.message, 'BREAKING CHANGE:') ||
-      contains(github.event.head_commit.message, 'perf:')
+      github.event.pull_request.merged == true &&
+      (startsWith(github.event.pull_request.title, 'feat:') ||
+       startsWith(github.event.pull_request.title, 'fix:') ||
+       startsWith(github.event.pull_request.title, 'perf:') ||
+       contains(github.event.pull_request.title, 'BREAKING CHANGE:') ||
+       contains(github.event.pull_request.title, '!:'))
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history for version calculation
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build twine python-semantic-release
+          pip install build twine
       
       - name: Calculate next version
         id: version
@@ -42,14 +49,15 @@ jobs:
           CURRENT=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
           
-          # Determine bump type from commit messages
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          # Determine bump type from PR title
+          PR_TITLE="${{ github.event.pull_request.title }}"
           
-          if [[ "$COMMIT_MSG" == *"BREAKING CHANGE:"* ]] || [[ "$COMMIT_MSG" == *"!"* ]]; then
+          # Breaking change: explicit prefix OR type!: / type(scope)!: syntax only
+          if [[ "$PR_TITLE" == *"BREAKING CHANGE:"* ]] || [[ "$PR_TITLE" =~ ^[a-zA-Z]+(\([^)]*\))?!: ]]; then
             BUMP="major"
-          elif [[ "$COMMIT_MSG" == *"feat:"* ]]; then
+          elif [[ "$PR_TITLE" == feat:* ]]; then
             BUMP="minor"
-          elif [[ "$COMMIT_MSG" == *"fix:"* ]] || [[ "$COMMIT_MSG" == *"perf:"* ]]; then
+          elif [[ "$PR_TITLE" == fix:* ]] || [[ "$PR_TITLE" == perf:* ]]; then
             BUMP="patch"
           else
             echo "No version bump needed"
@@ -75,6 +83,7 @@ jobs:
           
           echo "new=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "📦 Version bump: $CURRENT → $NEW_VERSION ($BUMP)"
+          echo "📝 From PR: $PR_TITLE"
       
       - name: Update version in files
         if: steps.version.outputs.new != ''
@@ -93,10 +102,10 @@ jobs:
         if: steps.version.outputs.new != ''
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pyproject.toml src/pglease/__init__.py
-          git commit -m "chore: bump version to ${{ steps.version.outputs.new }}"
-          git push
+          git commit -m "chore: bump version to ${{ steps.version.outputs.new }} [skip ci]"
+          git push origin main
       
       - name: Create tag
         if: steps.version.outputs.new != ''
@@ -116,7 +125,7 @@ jobs:
         run: |
           twine upload --repository testpypi dist/* || echo "⚠️ Test PyPI upload failed (might already exist)"
       
-      - name: Create GitHub Release (as draft)
+      - name: Create GitHub Release (draft)
         if: steps.version.outputs.new != ''
         uses: softprops/action-gh-release@v1
         with:
@@ -140,3 +149,8 @@ jobs:
             3. Enter version tag: `v${{ steps.version.outputs.new }}`
             4. Enter confirmation: `publish`
             5. Click "Run workflow"
+            
+            ---
+            
+            **PR:** ${{ github.event.pull_request.html_url }}
+            **Changes:** ${{ github.event.pull_request.title }}
