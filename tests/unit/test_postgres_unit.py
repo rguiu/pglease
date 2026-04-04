@@ -52,6 +52,7 @@ def _make_backend_no_init() -> PostgresBackend:
     backend._pool = None
     backend._conn = None
     backend._lock = threading.Lock()
+    backend._external_connection_factory = None  # no external factory by default
     # Build SQL objects without connecting
     from psycopg2 import sql
 
@@ -424,3 +425,166 @@ class TestClose:
         backend._conn = mock_conn
         backend.close()
         mock_conn.close.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# from_connection_factory
+# ---------------------------------------------------------------------------
+
+
+def _make_factory_backend() -> tuple[PostgresBackend, MagicMock]:
+    """Return (backend, mock_conn) wired up via a connection factory."""
+    mock_conn = MagicMock()
+    mock_conn.closed = False
+
+    @contextmanager
+    def factory():
+        yield mock_conn
+
+    backend = _make_backend_no_init()
+    backend._external_connection_factory = factory
+    return backend, mock_conn
+
+
+class TestFromConnectionFactory:
+    # ---- construction --------------------------------------------------
+
+    def test_classmethod_creates_backend_without_connection_string(
+        self,
+    ):
+        """from_connection_factory should succeed without any connection string."""
+        mock_conn = MagicMock()
+
+        @contextmanager
+        def fac():
+            yield mock_conn
+
+        with patch.object(PostgresBackend, "initialize", return_value=None):
+            backend = PostgresBackend.from_connection_factory(fac)
+
+        assert backend._external_connection_factory is fac
+        assert backend.connection_string == ""
+
+    def test_classmethod_calls_initialize_by_default(
+        self,
+    ):
+        mock_conn = MagicMock()
+
+        @contextmanager
+        def fac():
+            yield mock_conn
+
+        with patch.object(PostgresBackend, "initialize") as m:
+            PostgresBackend.from_connection_factory(fac)
+        m.assert_called_once()
+
+    def test_classmethod_skips_initialize_when_disabled(
+        self,
+    ):
+        mock_conn = MagicMock()
+
+        @contextmanager
+        def fac():
+            yield mock_conn
+
+        with patch.object(PostgresBackend, "initialize") as m:
+            PostgresBackend.from_connection_factory(fac, auto_initialize=False)
+        m.assert_not_called()
+
+    def test_init_raises_when_neither_string_nor_factory_given(self):
+        with pytest.raises(ValueError, match="Either connection_string or connection_factory"):
+            PostgresBackend("")
+
+    def test_init_raises_when_both_string_and_factory_given(self):
+        @contextmanager
+        def fac():
+            yield MagicMock()
+
+        with pytest.raises(ValueError, match="not both"):
+            PostgresBackend("postgresql://x", connection_factory=fac)
+
+    # ---- _connection contextmanager path --------------------------------
+
+    def test_connection_uses_factory(self):
+        """_connection() must yield the connection returned by the factory."""
+        backend, mock_conn = _make_factory_backend()
+
+        with backend._connection() as conn:
+            assert conn is mock_conn
+
+    def test_connection_commits_on_success(self):
+        backend, mock_conn = _make_factory_backend()
+        with backend._connection():
+            pass
+        mock_conn.commit.assert_called_once()
+
+    def test_connection_rolls_back_on_exception(self):
+        backend, mock_conn = _make_factory_backend()
+        with pytest.raises(RuntimeError), backend._connection():
+            raise RuntimeError("boom")
+        mock_conn.rollback.assert_called_once()
+
+    def test_connection_reraises_exception(self):
+        backend, mock_conn = _make_factory_backend()
+        with pytest.raises(ValueError, match="oops"), backend._connection():
+            raise ValueError("oops")
+
+    def test_connection_factory_exit_called_even_on_error(self):
+        """The factory's CM __exit__ must be called regardless of exceptions."""
+        exited: list[bool] = []
+
+        @contextmanager
+        def factory():
+            try:
+                yield MagicMock()
+            finally:
+                exited.append(True)
+
+        backend = _make_backend_no_init()
+        backend._external_connection_factory = factory
+
+        with pytest.raises(RuntimeError), backend._connection():
+            raise RuntimeError("error")
+
+        assert exited == [True], "factory CM __exit__ was not called"
+
+    # ---- close() is a no-op -------------------------------------------
+
+    def test_close_is_noop(self):
+        """close() must do nothing when using a connection factory."""
+        backend, mock_conn = _make_factory_backend()
+        backend.close()  # must not raise
+        mock_conn.close.assert_not_called()
+
+    def test_close_does_not_call_pool(self):
+        backend, mock_conn = _make_factory_backend()
+        mock_pool = MagicMock()
+        backend._pool = mock_pool  # should be ignored when factory present
+        backend.close()
+        mock_pool.closeall.assert_not_called()
+        mock_conn.close.assert_not_called()
+
+    # ---- full operation via factory ------------------------------------
+
+    def test_acquire_uses_factory_connection(self):
+        """acquire() must go through the factory's connection."""
+        backend, mock_conn = _make_factory_backend()
+        cursor = _make_cursor()
+        cursor.fetchone.return_value = None  # no existing row
+        mock_conn.cursor.return_value.__enter__ = lambda s: cursor
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        # Succeed; returns None when row is absent
+        backend.acquire(task_name="t", owner_id="w", ttl=30)
+        mock_conn.commit.assert_called()
+
+    def test_heartbeat_uses_factory_connection(self):
+        """heartbeat() must go through the factory's connection."""
+        backend, mock_conn = _make_factory_backend()
+        cursor = _make_cursor(rowcount=1)
+        mock_conn.cursor.return_value.__enter__ = lambda s: cursor
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        result = backend.heartbeat(task_name="t", owner_id="w", ttl=30)
+        assert result is True
+        mock_conn.commit.assert_called()

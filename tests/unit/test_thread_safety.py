@@ -121,6 +121,7 @@ def _make_fake_backend(detector: ConcurrencyDetector, sleep_s: float = 0.01):
     backend.connect_timeout = 10
     backend._pool_size = 1
     backend._pool = None
+    backend._external_connection_factory = None  # no external factory
 
     return backend
 

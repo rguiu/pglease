@@ -3,8 +3,10 @@
 import logging
 import re
 import threading
-from contextlib import contextmanager, suppress
+from collections.abc import Callable
+from contextlib import AbstractContextManager, contextmanager, suppress
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import psycopg2
 from psycopg2 import sql
@@ -50,44 +52,72 @@ class PostgresBackend(Backend):
 
     Uses row-level locking (SELECT FOR UPDATE) to ensure atomic operations
     and prevent race conditions.
+
+    **Connection sources** — choose one:
+
+    1. *Connection string* (default): pglease manages its own connection(s)::
+
+        backend = PostgresBackend("postgresql://user:pass@host/db")
+
+    2. *External connection factory*: borrow connections from an existing pool
+       or DI container via :meth:`from_connection_factory`::
+
+        backend = PostgresBackend.from_connection_factory(my_factory)
+
+    See :meth:`from_connection_factory` for a full explanation and examples.
     """
 
     TABLE_NAME = "pglease_leases"
 
     def __init__(
         self,
-        connection_string: str,
+        connection_string: str = "",
         auto_initialize: bool = True,
         connect_timeout: int = 10,
         pool_size: int = 1,
+        *,
+        connection_factory: Callable[[], AbstractContextManager[Any]] | None = None,
     ):
         """
         Initialize PostgreSQL backend.
 
         Args:
-            connection_string: PostgreSQL connection string
-            auto_initialize: Automatically create table if needed
+            connection_string: PostgreSQL connection string.  Required unless
+                ``connection_factory`` is provided.
+            auto_initialize: Automatically create table if needed.
             connect_timeout: Seconds to wait for a connection before raising
                 an error (default 10).  Set to 0 to disable the timeout.
             pool_size: Maximum number of simultaneous database connections
                 (default 1).  When > 1, a
                 ``psycopg2.pool.ThreadedConnectionPool`` is used so multiple
                 threads can perform DB operations concurrently rather than
-                serialising through a single connection.
+                serialising through a single connection.  Ignored when
+                ``connection_factory`` is provided.
+            connection_factory: Optional callable that returns a context
+                manager yielding a psycopg2-compatible connection.  When
+                supplied ``connection_string``, ``pool_size``, and
+                ``connect_timeout`` are ignored and pglease will call the
+                factory for every operation.  Prefer the
+                :meth:`from_connection_factory` classmethod which has a
+                richer docstring and usage examples.
         """
-        if pool_size < 1:
-            raise ValueError(f"pool_size must be ≥ 1, got {pool_size!r}")
+        if connection_factory is None and not connection_string:
+            raise ValueError("Either connection_string or connection_factory must be provided.")
+        if connection_factory is not None and connection_string:
+            raise ValueError("Provide connection_string or connection_factory, not both.")
+
+        self._external_connection_factory = connection_factory
         self.connection_string = connection_string
         self.connect_timeout = connect_timeout
         self._pool_size = pool_size
         self._conn: psycopg2.extensions.connection | None = None
         self._lock = threading.Lock()  # guards self._conn across threads
 
-        # Optional connection pool (pool_size > 1)
-        if pool_size > 1:
+        # Optional connection pool (pool_size > 1, only when using connection_string)
+        if connection_factory is None and pool_size > 1:
             from psycopg2 import pool as _pg_pool  # lazy import
 
-            _kwargs = {"cursor_factory": RealDictCursor}
+            _kwargs: dict[str, Any] = {"cursor_factory": RealDictCursor}
             if connect_timeout:
                 _kwargs["connect_timeout"] = connect_timeout
             self._pool = _pg_pool.ThreadedConnectionPool(
@@ -96,6 +126,8 @@ class PostgresBackend(Backend):
                 dsn=connection_string,
                 **_kwargs,
             )
+        elif connection_factory is None and pool_size < 1:
+            raise ValueError(f"pool_size must be ≥ 1, got {pool_size!r}")
         else:
             self._pool = None
 
@@ -172,6 +204,115 @@ class PostgresBackend(Backend):
         if auto_initialize:
             self.initialize()
 
+    # ------------------------------------------------------------------
+    # Alternative constructor
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_connection_factory(
+        cls,
+        factory: Callable[[], AbstractContextManager[Any]],
+        *,
+        auto_initialize: bool = True,
+    ) -> "PostgresBackend":
+        """Build a backend that sources connections from an external pool or DI container.
+
+        ``factory`` must be a **zero-argument callable** that returns a
+        *context manager* which yields a psycopg2-compatible connection.  pglease
+        will call ``commit()`` on success and ``rollback()`` on failure inside
+        the ``with factory() as conn:`` block; the factory's ``__exit__`` is
+        therefore responsible only for returning the connection to its pool.
+
+        pglease never calls ``conn.close()`` when using a factory, so the
+        connection lifecycle is fully owned by the caller.
+
+        Args:
+            factory: Zero-arg callable returning a context manager that yields
+                a psycopg2-compatible connection.
+            auto_initialize: Create the lease table if it does not exist
+                (default ``True``).
+
+        Returns:
+            A fully configured :class:`PostgresBackend` instance.
+
+        Examples::
+
+            # ── psycopg2 ThreadedConnectionPool ──────────────────────────────
+            from contextlib import contextmanager
+            from psycopg2 import pool
+            from psycopg2.extras import RealDictCursor
+            from pglease.backends.postgres import PostgresBackend
+
+            pg_pool = pool.ThreadedConnectionPool(
+                minconn=2, maxconn=10,
+                dsn="postgresql://user:pass@host/db",
+                cursor_factory=RealDictCursor,
+            )
+
+            @contextmanager
+            def borrow():
+                conn = pg_pool.getconn()
+                try:
+                    yield conn
+                finally:
+                    pg_pool.putconn(conn)
+
+            backend = PostgresBackend.from_connection_factory(borrow)
+            pglease = PGLease(backend)
+
+
+            # ── SQLAlchemy engine (raw psycopg2 connection) ───────────────────
+            from contextlib import contextmanager
+            from sqlalchemy import create_engine
+
+            engine = create_engine("postgresql+psycopg2://user:pass@host/db")
+
+            @contextmanager
+            def sa_conn():
+                conn = engine.raw_connection()
+                try:
+                    yield conn
+                finally:
+                    conn.close()  # returns it to SQLAlchemy's pool
+
+            backend = PostgresBackend.from_connection_factory(sa_conn)
+            pglease = PGLease(backend)
+
+
+            # ── Django (reuse the ORM connection) ─────────────────────────────
+            from contextlib import contextmanager
+            from django.db import connection as django_conn
+
+            @contextmanager
+            def django_factory():
+                # Ensure a connection is open and hand the raw psycopg2 conn
+                django_conn.ensure_connection()
+                yield django_conn.connection
+                # Transaction management stays with pglease (commit/rollback)
+                # Django's connection is closed by its own lifecycle management.
+
+            backend = PostgresBackend.from_connection_factory(django_factory)
+            pglease = PGLease(backend)
+
+
+            # ── Any DI container / dependency provider ────────────────────────
+            from contextlib import contextmanager
+
+            @contextmanager
+            def my_di_conn():
+                with my_di_container.get(DatabaseConnection) as conn:
+                    yield conn.raw_connection()
+
+            backend = PostgresBackend.from_connection_factory(my_di_conn)
+
+        .. note::
+            The factory **must not** commit or rollback inside the context
+            manager — pglease handles that itself so it can maintain
+            atomicity per-operation.  The factory should only acquire and
+            release the connection (e.g. ``pool.getconn`` / ``pool.putconn``).
+        """
+        return cls(connection_factory=factory, auto_initialize=auto_initialize)
+
     def _get_connection(self) -> psycopg2.extensions.connection:
         """Get or create the single persistent connection (single-connection path).
 
@@ -196,6 +337,10 @@ class PostgresBackend(Backend):
         do **not** need to call ``conn.commit()`` themselves.  On exception
         the transaction is rolled back before re-raising.
 
+        When *connection_factory* was supplied: borrows a connection from the
+        external factory; commit/rollback are handled here, lifecycle is
+        handled by the factory.
+
         When *pool_size > 1*: borrows a connection from the
         ``ThreadedConnectionPool`` and returns it to the pool after the
         block regardless of success or failure.
@@ -203,7 +348,16 @@ class PostgresBackend(Backend):
         When *pool_size == 1*: acquires ``self._lock`` and uses the single
         persistent connection.
         """
-        if self._pool is not None:
+        if self._external_connection_factory is not None:
+            with self._external_connection_factory() as conn:
+                try:
+                    yield conn
+                    conn.commit()
+                except Exception:
+                    with suppress(Exception):
+                        conn.rollback()
+                    raise
+        elif self._pool is not None:
             conn = self._pool.getconn()
             try:
                 yield conn
@@ -435,7 +589,17 @@ class PostgresBackend(Backend):
             raise BackendError(f"Failed to clean up expired leases: {_scrub_exc(e)}") from e
 
     def close(self) -> None:
-        """Close database connection(s)."""
+        """Close database connection(s).
+
+        When a *connection_factory* was provided this is a no-op — the
+        factory and its underlying pool are owned and managed by the caller.
+        """
+        if self._external_connection_factory is not None:
+            logger.debug(
+                "PostgresBackend.close(): connection factory in use — "
+                "pool lifecycle is managed externally, nothing to close."
+            )
+            return
         if self._pool is not None:
             self._pool.closeall()
         with self._lock:
