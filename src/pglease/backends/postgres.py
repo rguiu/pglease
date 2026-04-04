@@ -1,12 +1,10 @@
 """PostgreSQL backend implementation for pglease."""
 
 import logging
-import threading
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
-
 import re
+import threading
+from contextlib import contextmanager, suppress
+from datetime import UTC, datetime, timedelta
 
 import psycopg2
 from psycopg2 import sql
@@ -14,7 +12,7 @@ from psycopg2.extras import RealDictCursor
 
 from ..backend import Backend
 from ..exceptions import BackendError
-from ..models import Lease, AcquisitionResult
+from ..models import AcquisitionResult, Lease
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +27,9 @@ def _scrub_exc(exc: Exception) -> str:
     """
     msg = str(exc)
     # URL form: scheme://user:password@
-    msg = re.sub(r'(://[^:@/]+:)[^@/]+((?:@|//))', r'\1***\2', msg)
+    msg = re.sub(r"(://[^:@/]+:)[^@/]+((?:@|//))", r"\1***\2", msg)
     # Key=value form: password=<token>
-    msg = re.sub(r'(?i)(password\s*=\s*)\S+', r'\1***', msg)
-    return msg
+    return re.sub(r"(?i)(password\s*=\s*)\S+", r"\1***", msg)
 
 
 def _to_utc(dt: datetime) -> datetime:
@@ -43,20 +40,20 @@ def _to_utc(dt: datetime) -> datetime:
     timezone=UTC).  Normalise to aware so comparisons never raise TypeError.
     """
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 class PostgresBackend(Backend):
     """
     PostgreSQL-based backend using a lease table.
-    
+
     Uses row-level locking (SELECT FOR UPDATE) to ensure atomic operations
     and prevent race conditions.
     """
-    
+
     TABLE_NAME = "pglease_leases"
-    
+
     def __init__(
         self,
         connection_string: str,
@@ -66,7 +63,7 @@ class PostgresBackend(Backend):
     ):
         """
         Initialize PostgreSQL backend.
-        
+
         Args:
             connection_string: PostgreSQL connection string
             auto_initialize: Automatically create table if needed
@@ -83,12 +80,13 @@ class PostgresBackend(Backend):
         self.connection_string = connection_string
         self.connect_timeout = connect_timeout
         self._pool_size = pool_size
-        self._conn: Optional[psycopg2.extensions.connection] = None
+        self._conn: psycopg2.extensions.connection | None = None
         self._lock = threading.Lock()  # guards self._conn across threads
 
         # Optional connection pool (pool_size > 1)
         if pool_size > 1:
             from psycopg2 import pool as _pg_pool  # lazy import
+
             _kwargs = {"cursor_factory": RealDictCursor}
             if connect_timeout:
                 _kwargs["connect_timeout"] = connect_timeout
@@ -117,9 +115,9 @@ class PostgresBackend(Backend):
             )
         """).format(_tbl)
 
-        self._sql_create_index = sql.SQL(
-            "CREATE INDEX IF NOT EXISTS {} ON {}(expires_at)"
-        ).format(_idx, _tbl)
+        self._sql_create_index = sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {}(expires_at)").format(
+            _idx, _tbl
+        )
 
         self._sql_select_for_update = sql.SQL("""
             SELECT task_name, owner_id, acquired_at, expires_at, heartbeat_at
@@ -173,7 +171,7 @@ class PostgresBackend(Backend):
 
         if auto_initialize:
             self.initialize()
-    
+
     def _get_connection(self) -> psycopg2.extensions.connection:
         """Get or create the single persistent connection (single-connection path).
 
@@ -211,10 +209,8 @@ class PostgresBackend(Backend):
                 yield conn
                 conn.commit()
             except Exception:
-                try:
+                with suppress(Exception):
                     conn.rollback()
-                except Exception:
-                    pass
                 raise
             finally:
                 self._pool.putconn(conn)
@@ -225,29 +221,26 @@ class PostgresBackend(Backend):
                     yield conn
                     conn.commit()
                 except Exception:
-                    try:
+                    with suppress(Exception):
                         conn.rollback()
-                    except Exception:
-                        pass
                     raise
-    
+
     def initialize(self) -> None:
         """Create the lease table if it doesn't exist."""
         try:
-            with self._connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(self._sql_create_table)
-                    cur.execute(self._sql_create_index)
+            with self._connection() as conn, conn.cursor() as cur:
+                cur.execute(self._sql_create_table)
+                cur.execute(self._sql_create_index)
             logger.info(f"Initialized {self.TABLE_NAME} table")
         except BackendError:
             raise
         except Exception as e:
             raise BackendError(f"Failed to initialize backend: {_scrub_exc(e)}") from e
-    
+
     def acquire(self, task_name: str, owner_id: str, ttl: int) -> AcquisitionResult:
         """
         Acquire a lease using atomic row-level locking.
-        
+
         Algorithm:
         1. Start transaction
         2. Lock the row (SELECT FOR UPDATE) or create if doesn't exist
@@ -257,21 +250,52 @@ class PostgresBackend(Backend):
         """
         if ttl <= 0:
             raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = now + timedelta(seconds=ttl)
 
         try:
-            with self._connection() as conn:
-                with conn.cursor() as cur:
-                    # Try to lock existing row
-                    cur.execute(self._sql_select_for_update, (task_name,))
-                    row = cur.fetchone()
+            with self._connection() as conn, conn.cursor() as cur:
+                # Try to lock existing row
+                cur.execute(self._sql_select_for_update, (task_name,))
+                row = cur.fetchone()
 
-                    if row is None:
-                        # Lease doesn't exist - create it
+                if row is None:
+                    # Lease doesn't exist - create it
+                    cur.execute(self._sql_insert, (task_name, owner_id, now, expires_at, now))
+                    lease = Lease(
+                        task_name=task_name,
+                        owner_id=owner_id,
+                        acquired_at=now,
+                        expires_at=expires_at,
+                        heartbeat_at=now,
+                    )
+                    logger.info(f"Acquired new lease for {task_name} by {owner_id}")
+                    return AcquisitionResult.acquired(lease)
+
+                else:
+                    # Lease exists - check if available
+                    current_expires_at = _to_utc(row["expires_at"])
+                    current_owner = row["owner_id"]
+
+                    # Check if we already own it
+                    if current_owner == owner_id:
+                        # Renew our own lease
+                        cur.execute(self._sql_update_renew, (expires_at, now, task_name))
+                        lease = Lease(
+                            task_name=task_name,
+                            owner_id=owner_id,
+                            acquired_at=_to_utc(row["acquired_at"]),
+                            expires_at=expires_at,
+                            heartbeat_at=now,
+                        )
+                        logger.debug(f"Renewed lease for {task_name} by {owner_id}")
+                        return AcquisitionResult.acquired(lease)
+
+                    # Check if expired
+                    if current_expires_at <= now:
+                        # Take over expired lease
                         cur.execute(
-                            self._sql_insert,
-                            (task_name, owner_id, now, expires_at, now)
+                            self._sql_update_takeover, (owner_id, now, expires_at, now, task_name)
                         )
                         lease = Lease(
                             task_name=task_name,
@@ -280,77 +304,36 @@ class PostgresBackend(Backend):
                             expires_at=expires_at,
                             heartbeat_at=now,
                         )
-                        logger.info(f"Acquired new lease for {task_name} by {owner_id}")
+                        logger.info(
+                            f"Acquired expired lease for {task_name} (was owned by {current_owner})"
+                        )
                         return AcquisitionResult.acquired(lease)
 
                     else:
-                        # Lease exists - check if available
-                        current_expires_at = _to_utc(row["expires_at"])
-                        current_owner = row["owner_id"]
-
-                        # Check if we already own it
-                        if current_owner == owner_id:
-                            # Renew our own lease
-                            cur.execute(
-                                self._sql_update_renew,
-                                (expires_at, now, task_name)
-                            )
-                            lease = Lease(
-                                task_name=task_name,
-                                owner_id=owner_id,
-                                acquired_at=_to_utc(row["acquired_at"]),
-                                expires_at=expires_at,
-                                heartbeat_at=now,
-                            )
-                            logger.debug(f"Renewed lease for {task_name} by {owner_id}")
-                            return AcquisitionResult.acquired(lease)
-
-                        # Check if expired
-                        if current_expires_at <= now:
-                            # Take over expired lease
-                            cur.execute(
-                                self._sql_update_takeover,
-                                (owner_id, now, expires_at, now, task_name)
-                            )
-                            lease = Lease(
-                                task_name=task_name,
-                                owner_id=owner_id,
-                                acquired_at=now,
-                                expires_at=expires_at,
-                                heartbeat_at=now,
-                            )
-                            logger.info(
-                                f"Acquired expired lease for {task_name} "
-                                f"(was owned by {current_owner})"
-                            )
-                            return AcquisitionResult.acquired(lease)
-
-                        else:
-                            # Lease is held by another owner
-                            time_remaining = (current_expires_at - now).total_seconds()
-                            reason = f"Lease already held, expires in {time_remaining:.1f}s"
-                            logger.debug(
-                                f"Failed to acquire {task_name}: held by "
-                                f"{current_owner}, {time_remaining:.1f}s remaining"
-                            )
-                            return AcquisitionResult.failed(reason)
+                        # Lease is held by another owner
+                        time_remaining = (current_expires_at - now).total_seconds()
+                        reason = f"Lease already held, expires in {time_remaining:.1f}s"
+                        logger.debug(
+                            f"Failed to acquire {task_name}: held by "
+                            f"{current_owner}, {time_remaining:.1f}s remaining"
+                        )
+                        return AcquisitionResult.failed(reason)
 
         except (BackendError, ValueError):
             raise
         except Exception as e:
             raise BackendError(f"Failed to acquire lease: {_scrub_exc(e)}") from e
-    
+
     def release(self, task_name: str, owner_id: str) -> bool:
         """
         Release a lease if owned by the specified owner.
-        
+
         Only deletes the lease if the owner matches.
         """
         try:
-            with self._connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(self._sql_delete, (task_name, owner_id))
-                    deleted = cur.rowcount > 0
+            with self._connection() as conn, conn.cursor() as cur:
+                cur.execute(self._sql_delete, (task_name, owner_id))
+                deleted = cur.rowcount > 0
 
             if deleted:
                 logger.info(f"Released lease for {task_name} by {owner_id}")
@@ -363,23 +346,22 @@ class PostgresBackend(Backend):
             raise
         except Exception as e:
             raise BackendError(f"Failed to release lease: {_scrub_exc(e)}") from e
-    
+
     def heartbeat(self, task_name: str, owner_id: str, ttl: int) -> bool:
         """
         Renew a lease by extending its expiration time.
-        
+
         Only updates if the lease is owned by the specified owner.
         """
         if ttl <= 0:
             raise ValueError(f"ttl must be a positive integer, got {ttl!r}")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = now + timedelta(seconds=ttl)
 
         try:
-            with self._connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(self._sql_heartbeat, (expires_at, now, task_name, owner_id))
-                    updated = cur.rowcount > 0
+            with self._connection() as conn, conn.cursor() as cur:
+                cur.execute(self._sql_heartbeat, (expires_at, now, task_name, owner_id))
+                updated = cur.rowcount > 0
 
             if updated:
                 logger.debug(f"Heartbeat successful for {task_name} by {owner_id}")
@@ -392,14 +374,13 @@ class PostgresBackend(Backend):
             raise
         except Exception as e:
             raise BackendError(f"Failed to send heartbeat: {_scrub_exc(e)}") from e
-    
-    def get_lease(self, task_name: str) -> Optional[Lease]:
+
+    def get_lease(self, task_name: str) -> Lease | None:
         """Get the current lease for a task."""
         try:
-            with self._connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(self._sql_select, (task_name,))
-                    row = cur.fetchone()
+            with self._connection() as conn, conn.cursor() as cur:
+                cur.execute(self._sql_select, (task_name,))
+                row = cur.fetchone()
 
             if row is None:
                 return None
@@ -415,13 +396,12 @@ class PostgresBackend(Backend):
         except Exception as e:
             raise BackendError(f"Failed to get lease: {_scrub_exc(e)}") from e
 
-    def list_leases(self) -> List[Lease]:
+    def list_leases(self) -> list[Lease]:
         """Return all leases currently in the store."""
         try:
-            with self._connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(self._sql_list)
-                    rows = cur.fetchall()
+            with self._connection() as conn, conn.cursor() as cur:
+                cur.execute(self._sql_list)
+                rows = cur.fetchall()
 
             return [
                 Lease(
@@ -439,12 +419,11 @@ class PostgresBackend(Backend):
 
     def cleanup_expired(self) -> int:
         """Delete expired lease rows and return the number removed."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         try:
-            with self._connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(self._sql_cleanup_expired, (now,))
-                    deleted = cur.rowcount
+            with self._connection() as conn, conn.cursor() as cur:
+                cur.execute(self._sql_cleanup_expired, (now,))
+                deleted = cur.rowcount
 
             if deleted:
                 logger.info(f"Cleaned up {deleted} expired lease(s)")
@@ -454,7 +433,7 @@ class PostgresBackend(Backend):
             raise
         except Exception as e:
             raise BackendError(f"Failed to clean up expired leases: {_scrub_exc(e)}") from e
-    
+
     def close(self) -> None:
         """Close database connection(s)."""
         if self._pool is not None:

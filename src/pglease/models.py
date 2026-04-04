@@ -1,18 +1,17 @@
 """Core data models for pglease."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 
 @dataclass(frozen=True)
 class Lease:
     """
     Represents a time-bound ownership of a task.
-    
+
     Immutable to ensure thread-safety and clear ownership semantics.
     """
-    
+
     task_name: str
     owner_id: str
     acquired_at: datetime
@@ -31,25 +30,25 @@ class Lease:
         for field_name in ("acquired_at", "expires_at", "heartbeat_at"):
             dt: datetime = getattr(self, field_name)
             if dt.tzinfo is None:
-                object.__setattr__(self, field_name, dt.replace(tzinfo=timezone.utc))
+                object.__setattr__(self, field_name, dt.replace(tzinfo=UTC))
 
-    def is_expired(self, now: Optional[datetime] = None) -> bool:
+    def is_expired(self, now: datetime | None = None) -> bool:
         """Check if the lease has expired."""
         if now is None:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
         return now >= self.expires_at
-    
-    def time_remaining(self, now: Optional[datetime] = None) -> float:
+
+    def time_remaining(self, now: datetime | None = None) -> float:
         """Get remaining time in seconds before lease expires."""
         if now is None:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
         delta = self.expires_at - now
         return max(0.0, delta.total_seconds())
 
     def is_zombie(
         self,
         heartbeat_timeout: float = 60.0,
-        now: Optional[datetime] = None,
+        now: datetime | None = None,
     ) -> bool:
         """Check whether this lease is a zombie.
 
@@ -78,12 +77,12 @@ class Lease:
                 pglease.try_acquire("my-task", ttl=60)
         """
         if now is None:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
         if self.is_expired(now):
             return False  # expired naturally — not a zombie
         heartbeat_age = (now - self.heartbeat_at).total_seconds()
         return heartbeat_age > heartbeat_timeout
-    
+
     def __repr__(self) -> str:
         return (
             f"Lease(task_name={self.task_name!r}, "
@@ -96,28 +95,28 @@ class Lease:
 class AcquisitionResult:
     """
     Result of a lease acquisition attempt.
-    
+
     Provides clear semantics about whether acquisition succeeded and why.
     """
-    
+
     success: bool
-    lease: Optional[Lease] = None
-    reason: Optional[str] = None
-    
+    lease: Lease | None = None
+    reason: str | None = None
+
     @classmethod
     def acquired(cls, lease: Lease) -> "AcquisitionResult":
         """Create a successful acquisition result."""
         return cls(success=True, lease=lease, reason=None)
-    
+
     @classmethod
     def failed(cls, reason: str) -> "AcquisitionResult":
         """Create a failed acquisition result."""
         return cls(success=False, lease=None, reason=reason)
-    
+
     def __bool__(self) -> bool:
         """Allow using result in boolean context."""
         return self.success
-    
+
     def __repr__(self) -> str:
         if self.success:
             return f"AcquisitionResult(success=True, lease={self.lease!r})"

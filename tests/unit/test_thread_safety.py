@@ -18,18 +18,17 @@ records how many threads are simultaneously inside the "DB operation".
   - With    the lock → count stays at 1 (fix confirmed)
 """
 
-import contextlib
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from pglease.backends.postgres import PostgresBackend
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class ConcurrencyDetector:
     """
@@ -68,8 +67,12 @@ class ConcurrencyDetector:
 
 class _NoLock:
     """Drop-in replacement for threading.Lock that does nothing."""
-    def __enter__(self): return self
-    def __exit__(self, *_): pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
 
 
 def _make_fake_backend(detector: ConcurrencyDetector, sleep_s: float = 0.01):
@@ -78,9 +81,10 @@ def _make_fake_backend(detector: ConcurrencyDetector, sleep_s: float = 0.01):
     spends `sleep_s` seconds inside each cursor execute(), giving other
     threads enough time to enter the same section concurrently.
     """
+
     def fake_execute(*_args, **_kwargs):
         with detector:
-            time.sleep(sleep_s)   # simulate network round-trip
+            time.sleep(sleep_s)  # simulate network round-trip
 
     fake_cursor = MagicMock()
     fake_cursor.__enter__ = lambda s: s
@@ -97,7 +101,7 @@ def _make_fake_backend(detector: ConcurrencyDetector, sleep_s: float = 0.01):
     backend.connection_string = "postgresql://fake"
     backend.TABLE_NAME = "pglease_leases"
     backend._conn = fake_conn
-    backend._lock = threading.Lock()   # real lock (used by the fix)
+    backend._lock = threading.Lock()  # real lock (used by the fix)
     backend._get_connection = lambda: fake_conn
 
     # Provide the pre-built SQL objects that __init__ would normally create.
@@ -124,6 +128,7 @@ def _make_fake_backend(detector: ConcurrencyDetector, sleep_s: float = 0.01):
 # ---------------------------------------------------------------------------
 # Bug reproduction — without the lock, concurrent access is detectable
 # ---------------------------------------------------------------------------
+
 
 class TestRaceConditionWithoutLock(unittest.TestCase):
     """
@@ -216,14 +221,14 @@ class TestRaceConditionWithoutLock(unittest.TestCase):
 
         self.assertTrue(
             detector.violation_detected,
-            f"Expected concurrent DB access (max={detector.max_concurrent}) "
-            "but none detected.",
+            f"Expected concurrent DB access (max={detector.max_concurrent}) but none detected.",
         )
 
 
 # ---------------------------------------------------------------------------
 # Fix verification — WITH the lock, access is always serialised
 # ---------------------------------------------------------------------------
+
 
 class TestThreadSafetyWithLock(unittest.TestCase):
     """
@@ -331,7 +336,8 @@ class TestThreadSafetyWithLock(unittest.TestCase):
             t.join()
 
         self.assertEqual(
-            detector.max_concurrent, 1,
+            detector.max_concurrent,
+            1,
             f"max_concurrent={detector.max_concurrent}: "
             "DB section entered by multiple threads simultaneously.",
         )

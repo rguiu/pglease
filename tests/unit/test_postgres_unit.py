@@ -4,22 +4,21 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, call, PropertyMock
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from pglease.backends.postgres import PostgresBackend, _scrub_exc, _to_utc
 from pglease.exceptions import BackendError
-from pglease.models import AcquisitionResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _make_row(
@@ -30,6 +29,7 @@ def _make_row(
 ) -> dict:
     now = _utcnow()
     from datetime import timedelta
+
     if expired:
         expires_at = now - timedelta(seconds=10)
     else:
@@ -54,6 +54,7 @@ def _make_backend_no_init() -> PostgresBackend:
     backend._lock = threading.Lock()
     # Build SQL objects without connecting
     from psycopg2 import sql
+
     _tbl = sql.Identifier(PostgresBackend.TABLE_NAME)
     _idx = sql.Identifier(f"idx_{PostgresBackend.TABLE_NAME}_expires_at")
     backend._sql_create_table = sql.SQL("SELECT 1")
@@ -91,9 +92,11 @@ def _make_conn(cursor: MagicMock) -> MagicMock:
 @contextmanager
 def _patch_connection(backend: PostgresBackend, conn: MagicMock):
     """Patch backend._connection() to yield *conn* directly."""
+
     @contextmanager
     def fake_connection():
         yield conn
+
     with patch.object(backend, "_connection", fake_connection):
         yield
 
@@ -101,6 +104,7 @@ def _patch_connection(backend: PostgresBackend, conn: MagicMock):
 # ---------------------------------------------------------------------------
 # _scrub_exc
 # ---------------------------------------------------------------------------
+
 
 class TestScrubExc:
     def test_redacts_url_password(self):
@@ -124,25 +128,29 @@ class TestScrubExc:
 # _to_utc
 # ---------------------------------------------------------------------------
 
+
 class TestToUtc:
     def test_naive_becomes_utc(self):
         naive = datetime(2024, 1, 1, 12, 0, 0)
         result = _to_utc(naive)
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
         assert result.year == 2024
 
     def test_aware_normalised_to_utc(self):
-        from datetime import timezone as tz, timedelta
+        from datetime import timedelta
+        from datetime import timezone as tz
+
         eastern = tz(timedelta(hours=-5))
         aware = datetime(2024, 6, 1, 10, 0, 0, tzinfo=eastern)
         result = _to_utc(aware)
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
         assert result.hour == 15  # 10 + 5 = 15 UTC
 
 
 # ---------------------------------------------------------------------------
 # __init__ validation
 # ---------------------------------------------------------------------------
+
 
 class TestInit:
     def test_pool_size_zero_raises(self):
@@ -157,6 +165,7 @@ class TestInit:
 # ---------------------------------------------------------------------------
 # initialize
 # ---------------------------------------------------------------------------
+
 
 class TestInitialize:
     def test_calls_create_table_and_index(self):
@@ -174,14 +183,17 @@ class TestInitialize:
         cursor.__exit__ = MagicMock(return_value=False)
         cursor.execute.side_effect = Exception("boom")
         conn = _make_conn(cursor)
-        with _patch_connection(backend, conn):
-            with pytest.raises(BackendError, match="Failed to initialize"):
-                backend.initialize()
+        with (
+            _patch_connection(backend, conn),
+            pytest.raises(BackendError, match="Failed to initialize"),
+        ):
+            backend.initialize()
 
 
 # ---------------------------------------------------------------------------
 # acquire
 # ---------------------------------------------------------------------------
+
 
 class TestAcquire:
     def test_invalid_ttl_raises_value_error(self):
@@ -239,14 +251,17 @@ class TestAcquire:
         cursor.__exit__ = MagicMock(return_value=False)
         cursor.execute.side_effect = Exception("db gone")
         conn = _make_conn(cursor)
-        with _patch_connection(backend, conn):
-            with pytest.raises(BackendError, match="Failed to acquire"):
-                backend.acquire("t", "w", ttl=60)
+        with (
+            _patch_connection(backend, conn),
+            pytest.raises(BackendError, match="Failed to acquire"),
+        ):
+            backend.acquire("t", "w", ttl=60)
 
 
 # ---------------------------------------------------------------------------
 # release
 # ---------------------------------------------------------------------------
+
 
 class TestRelease:
     def test_returns_true_when_deleted(self):
@@ -272,14 +287,17 @@ class TestRelease:
         cursor.__exit__ = MagicMock(return_value=False)
         cursor.execute.side_effect = Exception("boom")
         conn = _make_conn(cursor)
-        with _patch_connection(backend, conn):
-            with pytest.raises(BackendError, match="Failed to release"):
-                backend.release("t", "w")
+        with (
+            _patch_connection(backend, conn),
+            pytest.raises(BackendError, match="Failed to release"),
+        ):
+            backend.release("t", "w")
 
 
 # ---------------------------------------------------------------------------
 # heartbeat
 # ---------------------------------------------------------------------------
+
 
 class TestHeartbeat:
     def test_returns_true_when_updated(self):
@@ -308,6 +326,7 @@ class TestHeartbeat:
 # get_lease
 # ---------------------------------------------------------------------------
 
+
 class TestGetLease:
     def test_returns_none_when_no_row(self):
         backend = _make_backend_no_init()
@@ -333,6 +352,7 @@ class TestGetLease:
 # list_leases
 # ---------------------------------------------------------------------------
 
+
 class TestListLeases:
     def test_returns_empty_list(self):
         backend = _make_backend_no_init()
@@ -357,6 +377,7 @@ class TestListLeases:
 # cleanup_expired
 # ---------------------------------------------------------------------------
 
+
 class TestCleanupExpired:
     def test_returns_deleted_count(self):
         backend = _make_backend_no_init()
@@ -373,14 +394,14 @@ class TestCleanupExpired:
         cursor.__exit__ = MagicMock(return_value=False)
         cursor.execute.side_effect = Exception("gone")
         conn = _make_conn(cursor)
-        with _patch_connection(backend, conn):
-            with pytest.raises(BackendError, match="Failed to clean"):
-                backend.cleanup_expired()
+        with _patch_connection(backend, conn), pytest.raises(BackendError, match="Failed to clean"):
+            backend.cleanup_expired()
 
 
 # ---------------------------------------------------------------------------
 # close
 # ---------------------------------------------------------------------------
+
 
 class TestClose:
     def test_closes_single_connection(self):

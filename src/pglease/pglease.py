@@ -7,14 +7,14 @@ import logging
 import threading
 import time
 import uuid
-from contextlib import contextmanager
-from typing import Callable, List, Optional, TypeVar, Union
+from collections.abc import Callable
+from typing import TypeVar
 
 from .backend import Backend
 from .backends.postgres import PostgresBackend
-from .exceptions import AcquisitionError, ReleaseError
+from .exceptions import AcquisitionError
 from .heartbeat import HeartbeatManager
-from .models import AcquisitionResult, Lease
+from .models import Lease
 
 logger = logging.getLogger(__name__)
 
@@ -24,19 +24,19 @@ F = TypeVar("F", bound=Callable)
 class PGLease:
     """
     Main API for distributed task coordination.
-    
+
     Provides multiple ways to coordinate task execution:
     - Context manager: `with pglease.acquire(...)`
     - Explicit control: `pglease.try_acquire(...)` + `pglease.release(...)`
     - Decorator: `@pglease.singleton_task(...)`
     """
-    
+
     def __init__(
         self,
-        backend: Union[Backend, str],
-        owner_id: Optional[str] = None,
+        backend: Backend | str,
+        owner_id: str | None = None,
         heartbeat_interval: int = 10,
-        on_lease_lost: Optional[Callable[[str], None]] = None,
+        on_lease_lost: Callable[[str], None] | None = None,
     ):
         """
         Initialize coordinator.
@@ -62,7 +62,7 @@ class PGLease:
             self.backend: Backend = PostgresBackend(backend)
         else:
             self.backend = backend
-        
+
         # Generate owner ID if not provided
         self.owner_id = owner_id or self._generate_owner_id()
 
@@ -82,26 +82,27 @@ class PGLease:
         self._active_leases_lock = threading.Lock()
 
         logger.info(f"Initialized PGLease with owner_id={self.owner_id}")
-    
+
     @staticmethod
     def _generate_owner_id() -> str:
         """Generate a unique owner ID."""
         import socket
+
         hostname = socket.gethostname()
         unique_id = uuid.uuid4().hex[:8]
         return f"{hostname}-{unique_id}"
-    
+
     def try_acquire(self, task_name: str, ttl: int = 60) -> bool:
         """
         Try to acquire a lease without blocking.
-        
+
         Args:
             task_name: Unique identifier for the task
             ttl: Time-to-live in seconds for the lease
-            
+
         Returns:
             True if lease acquired, False otherwise
-            
+
         Example:
             if coordinator.try_acquire("my-task", ttl=60):
                 try:
@@ -118,6 +119,7 @@ class PGLease:
         if result.success:
             with self._active_leases_lock:  # CRITICAL-001
                 self._active_leases.add(task_name)
+
             # Start heartbeat to keep lease alive.
             # The internal callback removes the task from _active_leases so
             # that close() does not attempt to release an already-lost lease,
@@ -133,14 +135,16 @@ class PGLease:
             self.heartbeat_manager.start(task_name, self.owner_id, ttl, on_lease_lost=_on_lost)
             logger.info(f"Acquired lease for {task_name}")
             return True
-        
+
         logger.debug(f"Failed to acquire lease for {task_name}: {result.reason}")
         return False
-    
-    def acquire(self, task_name: str, ttl: int = 60, raise_on_failure: bool = False) -> "LeaseContext":
+
+    def acquire(
+        self, task_name: str, ttl: int = 60, raise_on_failure: bool = False
+    ) -> LeaseContext:
         """
         Acquire a lease and return a context manager.
-        
+
         Args:
             task_name: Unique identifier for the task
             ttl: Time-to-live in seconds for the lease
@@ -148,10 +152,10 @@ class PGLease:
                 cannot be acquired.  If False (default), the context manager
                 simply enters with ``acquired=False`` and the body is skipped
                 when used with ``if acquired:``.
-            
+
         Returns:
             Context manager for the lease
-            
+
         Example:
             with coordinator.acquire("my-task", ttl=60) as acquired:
                 if acquired:
@@ -162,14 +166,14 @@ class PGLease:
                 perform_task()  # only runs if lease was acquired
         """
         return LeaseContext(self, task_name, ttl, raise_on_failure)
-    
+
     def release(self, task_name: str) -> bool:
         """
         Release a lease.
-        
+
         Args:
             task_name: Unique identifier for the task
-            
+
         Returns:
             True if lease was released, False if not held
         """
@@ -190,20 +194,20 @@ class PGLease:
             logger.debug(f"No lease to release for {task_name}")
 
         return released
-    
-    def get_lease(self, task_name: str) -> Optional[Lease]:
+
+    def get_lease(self, task_name: str) -> Lease | None:
         """
         Get the current lease for a task.
-        
+
         Args:
             task_name: Unique identifier for the task
-            
+
         Returns:
             Current Lease if exists, None otherwise
         """
         return self.backend.get_lease(task_name)
 
-    def list_leases(self) -> List[Lease]:
+    def list_leases(self) -> list[Lease]:
         """
         Return all leases currently in the store.
 
@@ -247,7 +251,7 @@ class PGLease:
         self,
         task_name: str,
         ttl: int = 60,
-        timeout: Optional[float] = 60.0,
+        timeout: float | None = 60.0,
         poll_interval: float = 5.0,
     ) -> bool:
         """
@@ -305,16 +309,14 @@ class PGLease:
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise AcquisitionError(
-                    f"Timed out waiting {timeout:.1f}s for lease {task_name!r}"
-                )
+                raise AcquisitionError(f"Timed out waiting {timeout:.1f}s for lease {task_name!r}")
             sleep_for = min(poll_interval, remaining)
             logger.debug(
                 f"Lease {task_name!r} not available; retrying in {sleep_for:.1f}s "
                 f"({remaining:.1f}s remaining)"
             )
             time.sleep(sleep_for)
-    
+
     def singleton_task(
         self,
         task_name: str,
@@ -323,15 +325,15 @@ class PGLease:
     ) -> Callable[[F], F]:
         """
         Decorator for singleton task execution.
-        
+
         Args:
             task_name: Unique identifier for the task
             ttl: Time-to-live in seconds for the lease
             skip_if_locked: If True, skip execution if locked; if False, raise error
-            
+
         Returns:
             Decorated function
-            
+
         Example:
             @coordinator.singleton_task("my-task", ttl=60)
             def my_task():
@@ -354,23 +356,19 @@ class PGLease:
                         self.release(task_name)
                 else:
                     if skip_if_locked:
-                        logger.info(
-                            f"Skipping {func.__name__} - lease held by another worker"
-                        )
+                        logger.info(f"Skipping {func.__name__} - lease held by another worker")
                         return None
                     else:
-                        raise AcquisitionError(
-                            f"Failed to acquire lease for {task_name}"
-                        )
-            
+                        raise AcquisitionError(f"Failed to acquire lease for {task_name}")
+
             return wrapper  # type: ignore
-        
+
         return decorator
-    
+
     def close(self) -> None:
         """
         Clean up resources.
-        
+
         Stops all heartbeats, releases all leases, and closes backend.
         """
         logger.info("Closing coordinator")
@@ -393,11 +391,11 @@ class PGLease:
 
         # Close backend
         self.backend.close()
-    
-    def __enter__(self) -> "PGLease":
+
+    def __enter__(self) -> PGLease:
         """Support using PGLease as a context manager."""
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Clean up when exiting context."""
         self.close()
@@ -406,10 +404,10 @@ class PGLease:
 class LeaseContext:
     """
     Context manager for lease acquisition.
-    
+
     Automatically releases the lease when exiting the context.
     """
-    
+
     def __init__(
         self,
         coordinator: PGLease,
@@ -422,16 +420,16 @@ class LeaseContext:
         self.ttl = ttl
         self.raise_on_failure = raise_on_failure
         self.acquired = False
-    
+
     def __enter__(self) -> bool:
         """Acquire lease when entering context."""
         self.acquired = self.coordinator.try_acquire(self.task_name, self.ttl)
-        
+
         if not self.acquired and self.raise_on_failure:
             raise AcquisitionError(f"Failed to acquire lease for {self.task_name}")
-        
+
         return self.acquired
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Release lease when exiting context."""
         if self.acquired:

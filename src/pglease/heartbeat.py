@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 from .backend import Backend
 from .exceptions import HeartbeatError
@@ -34,20 +34,22 @@ class HeartbeatManager:
         """
         self.backend = backend
         self.interval = interval
-        self._threads: Dict[str, threading.Thread] = {}
-        self._stop_events: Dict[str, threading.Event] = {}
-        self._callbacks: Dict[str, Optional[Callable[[str], None]]] = {}
-        self._lock = threading.RLock()  # RLock: re-entrant so start() can call stop() while holding the lock
+        self._threads: dict[str, threading.Thread] = {}
+        self._stop_events: dict[str, threading.Event] = {}
+        self._callbacks: dict[str, Callable[[str], None] | None] = {}
+        self._lock = (
+            threading.RLock()
+        )  # RLock: re-entrant so start() can call stop() while holding the lock
         # HIGH-002: threads that did not exit within the join timeout are
         # tracked here so callers can observe the leak and alert on it.
-        self._zombie_threads: Dict[str, threading.Thread] = {}
+        self._zombie_threads: dict[str, threading.Thread] = {}
 
     def start(
         self,
         task_name: str,
         owner_id: str,
         ttl: int,
-        on_lease_lost: Optional[Callable[[str], None]] = None,
+        on_lease_lost: Callable[[str], None] | None = None,
     ) -> None:
         """
         Start heartbeat thread for a task.
@@ -83,7 +85,7 @@ class HeartbeatManager:
             thread.start()
 
             logger.debug(f"Started heartbeat for {task_name}")
-    
+
     def stop(self, task_name: str) -> None:
         """
         Stop heartbeat thread for a task.
@@ -131,7 +133,7 @@ class HeartbeatManager:
             self._callbacks.pop(task_name, None)
 
             logger.debug(f"Stopped heartbeat for {task_name}")
-    
+
     def stop_all(self) -> None:
         """Stop all heartbeat threads."""
         with self._lock:
@@ -140,7 +142,7 @@ class HeartbeatManager:
         for task_name in task_names:
             self.stop(task_name)
 
-    def get_zombie_threads(self) -> List[str]:
+    def get_zombie_threads(self) -> list[str]:
         """Return task names whose heartbeat threads became zombies.
 
         A zombie thread failed to exit within the 30-second join timeout
@@ -152,7 +154,7 @@ class HeartbeatManager:
         """
         with self._lock:
             return list(self._zombie_threads.keys())
-    
+
     def _heartbeat_loop(
         self,
         task_name: str,
@@ -197,7 +199,7 @@ class HeartbeatManager:
 
                 except Exception as e:
                     if attempt < _max_retries - 1:
-                        backoff = 2 ** attempt  # 1 s, 2 s
+                        backoff = 2**attempt  # 1 s, 2 s
                         logger.warning(
                             f"Transient heartbeat error for {task_name} "
                             f"(attempt {attempt + 1}/{_max_retries}): {e}. "
@@ -206,8 +208,7 @@ class HeartbeatManager:
                         time.sleep(backoff)
                     else:
                         logger.error(
-                            f"Heartbeat for {task_name} failed after "
-                            f"{_max_retries} attempts: {e}"
+                            f"Heartbeat for {task_name} failed after {_max_retries} attempts: {e}"
                         )
                         failed = True
 
@@ -222,6 +223,4 @@ class HeartbeatManager:
                 try:
                     callback(task_name)
                 except Exception as cb_exc:
-                    logger.error(
-                        f"on_lease_lost callback raised for {task_name}: {cb_exc}"
-                    )
+                    logger.error(f"on_lease_lost callback raised for {task_name}: {cb_exc}")

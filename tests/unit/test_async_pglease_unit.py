@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
 
-from pglease.async_pglease import AsyncLeaseContext, AsyncPGLease
+from pglease.async_pglease import AsyncPGLease
 from pglease.exceptions import AcquisitionError
-from pglease.models import AcquisitionResult, Lease
+from pglease.models import Lease
 from pglease.pglease import PGLease
 
 pytestmark = pytest.mark.asyncio
@@ -20,8 +19,9 @@ pytestmark = pytest.mark.asyncio
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _lease(task: str = "task") -> Lease:
@@ -52,6 +52,7 @@ def _make_async(*, acquired: bool = True, task: str = "task") -> tuple[AsyncPGLe
 # Construction
 # ---------------------------------------------------------------------------
 
+
 class TestAsyncPGLeaseInit:
     async def test_accepts_pglease_instance(self):
         sync = _make_sync_mock()
@@ -64,15 +65,16 @@ class TestAsyncPGLeaseInit:
         assert apg.owner_id == "test-worker"
 
     async def test_accepts_connection_string(self):
-        with patch("pglease.async_pglease.PGLease") as MockPGLease:
-            MockPGLease.return_value = _make_sync_mock()
-            apg = AsyncPGLease("postgresql://user:pass@localhost/db", owner_id="w")
-            MockPGLease.assert_called_once()
+        with patch("pglease.async_pglease.PGLease") as mock_pglease:
+            mock_pglease.return_value = _make_sync_mock()
+            AsyncPGLease("postgresql://user:pass@localhost/db", owner_id="w")
+            mock_pglease.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
 # Core async API
 # ---------------------------------------------------------------------------
+
 
 class TestAsyncCoreAPI:
     async def test_try_acquire_true(self):
@@ -126,6 +128,7 @@ class TestAsyncCoreAPI:
 # acquire() async context manager
 # ---------------------------------------------------------------------------
 
+
 class TestAsyncAcquireContextManager:
     async def test_acquired_true(self):
         apg, _ = _make_async(acquired=True)
@@ -167,6 +170,7 @@ class TestAsyncAcquireContextManager:
 # wait_for_lease
 # ---------------------------------------------------------------------------
 
+
 class TestAsyncWaitForLease:
     async def test_raises_value_error_for_timeout_zero(self):
         apg, _ = _make_async()
@@ -206,6 +210,7 @@ class TestAsyncWaitForLease:
 # ---------------------------------------------------------------------------
 # Async context manager (__aenter__ / __aexit__)
 # ---------------------------------------------------------------------------
+
 
 class TestAsyncContextManager:
     async def test_aenter_returns_self(self):

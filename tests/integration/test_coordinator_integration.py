@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 
@@ -28,6 +27,7 @@ pytestmark = pytest.mark.skipif(not POSTGRES_URL, reason="TEST_POSTGRES_URL not 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def _uid() -> str:
     return uuid.uuid4().hex[:8]
@@ -44,6 +44,7 @@ def pg():
 # list_leases
 # ---------------------------------------------------------------------------
 
+
 class TestListLeases:
     def test_empty_cluster_returns_empty(self, pg):
         leases = pg.list_leases()
@@ -53,7 +54,7 @@ class TestListLeases:
         task = "list-" + _uid()
         pg.try_acquire(task, ttl=60)
         leases = pg.list_leases()
-        names = {l.task_name for l in leases}
+        names = {lease.task_name for lease in leases}
         assert task in names
         pg.release(task)
 
@@ -62,7 +63,7 @@ class TestListLeases:
         for t in tasks:
             pg.try_acquire(t, ttl=60)
         leases = pg.list_leases()
-        names = {l.task_name for l in leases}
+        names = {lease.task_name for lease in leases}
         for t in tasks:
             assert t in names
         for t in tasks:
@@ -73,11 +74,12 @@ class TestListLeases:
 # cleanup_expired
 # ---------------------------------------------------------------------------
 
+
 class TestCleanupExpired:
     def test_does_not_remove_active_leases(self, pg):
         task = "active-" + _uid()
         pg.try_acquire(task, ttl=3600)
-        removed = pg.cleanup_expired()
+        pg.cleanup_expired()
         assert pg.get_lease(task) is not None
         pg.release(task)
 
@@ -100,6 +102,7 @@ class TestCleanupExpired:
 # ---------------------------------------------------------------------------
 # wait_for_lease
 # ---------------------------------------------------------------------------
+
 
 class TestWaitForLease:
     def test_acquires_when_immediately_available(self, pg):
@@ -153,15 +156,15 @@ class TestWaitForLease:
 # raise_on_failure context manager
 # ---------------------------------------------------------------------------
 
+
 class TestRaiseOnFailure:
     def test_raises_when_lease_held(self, pg):
         task = "rof-" + _uid()
         pg.try_acquire(task, ttl=60)
         pg2 = PGLease(POSTGRES_URL, owner_id="w2-" + _uid(), heartbeat_interval=60)
         try:
-            with pytest.raises(AcquisitionError):
-                with pg2.acquire(task, ttl=60, raise_on_failure=True):
-                    pass
+            with pytest.raises(AcquisitionError), pg2.acquire(task, ttl=60, raise_on_failure=True):
+                pass
         finally:
             pg.release(task)
             pg2.close()
@@ -175,6 +178,7 @@ class TestRaiseOnFailure:
 # ---------------------------------------------------------------------------
 # on_lease_lost callback
 # ---------------------------------------------------------------------------
+
 
 class TestOnLeaseLost:
     def test_callback_called_when_lease_lost(self):
@@ -208,6 +212,7 @@ class TestOnLeaseLost:
 # PGLease as a context manager
 # ---------------------------------------------------------------------------
 
+
 class TestPGLeaseContextManager:
     def test_close_called_on_exit(self):
         task = "cm-" + _uid()
@@ -224,10 +229,9 @@ class TestPGLeaseContextManager:
 
     def test_close_called_even_on_exception(self):
         task = "cm-exc-" + _uid()
-        with pytest.raises(RuntimeError):
-            with PGLease(POSTGRES_URL, owner_id="cm-exc-" + _uid()) as pg:
-                pg.try_acquire(task, ttl=60)
-                raise RuntimeError("crash")
+        with pytest.raises(RuntimeError), PGLease(POSTGRES_URL, owner_id="cm-exc-" + _uid()) as pg:
+            pg.try_acquire(task, ttl=60)
+            raise RuntimeError("crash")
         check = PGLease(POSTGRES_URL, owner_id="check-exc-" + _uid())
         try:
             assert check.get_lease(task) is None

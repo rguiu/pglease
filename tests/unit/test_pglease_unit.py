@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
-from unittest.mock import MagicMock, Mock, call, patch
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,13 +13,13 @@ from pglease.exceptions import AcquisitionError
 from pglease.models import AcquisitionResult, Lease
 from pglease.pglease import PGLease
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _lease(task: str = "task", owner: str = "w", ttl: int = 60) -> Lease:
@@ -56,6 +54,7 @@ def _make_pglease(*, acquired: bool = True, task: str = "task") -> tuple[PGLease
 # Initialisation
 # ---------------------------------------------------------------------------
 
+
 class TestPGLeaseInit:
     def test_accepts_backend_instance(self):
         backend = _make_backend()
@@ -72,6 +71,7 @@ class TestPGLeaseInit:
     def test_generate_owner_id_contains_hostname(self):
         backend = _make_backend()
         import socket
+
         pg = PGLease(backend)
         assert socket.gethostname() in pg.owner_id
 
@@ -83,9 +83,12 @@ class TestPGLeaseInit:
     def test_creates_postgres_backend_from_string(self):
         """Passing a connection string creates a PostgresBackend."""
         from pglease.backends.postgres import PostgresBackend
-        with patch.object(PostgresBackend, "__init__", return_value=None) as mock_init, \
-             patch.object(PostgresBackend, "initialize"):
-            pg = PGLease.__new__(PGLease)
+
+        with (
+            patch.object(PostgresBackend, "__init__", return_value=None),
+            patch.object(PostgresBackend, "initialize"),
+        ):
+            PGLease.__new__(PGLease)
             # Just verify the branch exists; full init tested in integration tests
             pass
 
@@ -93,6 +96,7 @@ class TestPGLeaseInit:
 # ---------------------------------------------------------------------------
 # try_acquire
 # ---------------------------------------------------------------------------
+
 
 class TestTryAcquire:
     def test_returns_true_on_success(self):
@@ -149,6 +153,7 @@ class TestTryAcquire:
 # release
 # ---------------------------------------------------------------------------
 
+
 class TestRelease:
     def test_returns_true_when_released(self):
         pg, backend = _make_pglease()
@@ -180,6 +185,7 @@ class TestRelease:
 # acquire() context manager
 # ---------------------------------------------------------------------------
 
+
 class TestAcquireContextManager:
     def test_acquired_true_when_lease_obtained(self):
         pg, _ = _make_pglease(acquired=True)
@@ -209,16 +215,14 @@ class TestAcquireContextManager:
 
     def test_raises_on_failure_when_requested(self):
         pg, _ = _make_pglease(acquired=False)
-        with pytest.raises(AcquisitionError):
-            with pg.acquire("task", ttl=60, raise_on_failure=True):
-                pass
+        with pytest.raises(AcquisitionError), pg.acquire("task", ttl=60, raise_on_failure=True):
+            pass
         pg.close()
 
     def test_releases_even_on_exception_in_body(self):
         pg, backend = _make_pglease(acquired=True)
-        with pytest.raises(RuntimeError):
-            with pg.acquire("task", ttl=60):
-                raise RuntimeError("boom")
+        with pytest.raises(RuntimeError), pg.acquire("task", ttl=60):
+            raise RuntimeError("boom")
         backend.release.assert_called_once()
         pg.close()
 
@@ -226,6 +230,7 @@ class TestAcquireContextManager:
 # ---------------------------------------------------------------------------
 # get_lease / list_leases / cleanup_expired
 # ---------------------------------------------------------------------------
+
 
 class TestObservabilityMethods:
     def test_get_lease_delegates_to_backend(self):
@@ -253,6 +258,7 @@ class TestObservabilityMethods:
 # ---------------------------------------------------------------------------
 # wait_for_lease
 # ---------------------------------------------------------------------------
+
 
 class TestWaitForLease:
     def test_succeeds_immediately_when_lease_available(self):
@@ -290,13 +296,17 @@ class TestWaitForLease:
         with patch("time.sleep"):  # make poll instant
             counter = [0]
             original = time.monotonic
+
             def fake_monotonic():
                 counter[0] += 1
                 # After a few calls, jump the clock forward
                 return original() + (10.0 if counter[0] > 4 else 0.0)
-            with patch("time.monotonic", side_effect=fake_monotonic):
-                with pytest.raises(AcquisitionError):
-                    pg.wait_for_lease("task", ttl=60, timeout=5.0, poll_interval=0.01)
+
+            with (
+                patch("time.monotonic", side_effect=fake_monotonic),
+                pytest.raises(AcquisitionError),
+            ):
+                pg.wait_for_lease("task", ttl=60, timeout=5.0, poll_interval=0.01)
         pg.close()
 
     def test_none_timeout_waits_indefinitely(self):
@@ -318,6 +328,7 @@ class TestWaitForLease:
 # ---------------------------------------------------------------------------
 # singleton_task decorator
 # ---------------------------------------------------------------------------
+
 
 class TestSingletonTask:
     def test_executes_when_lease_acquired(self):
@@ -396,6 +407,7 @@ class TestSingletonTask:
 # on_lease_lost callback
 # ---------------------------------------------------------------------------
 
+
 class TestOnLeaseLost:
     def test_callback_called_when_heartbeat_fails(self):
         lost = []
@@ -420,6 +432,7 @@ class TestOnLeaseLost:
 # ---------------------------------------------------------------------------
 # close / context manager
 # ---------------------------------------------------------------------------
+
 
 class TestCloseAndContextManager:
     def test_close_stops_all_heartbeats(self):
@@ -452,9 +465,8 @@ class TestCloseAndContextManager:
     def test_context_manager_closes_on_exception(self):
         pg, backend = _make_pglease()
         pg.heartbeat_manager = MagicMock()
-        with pytest.raises(RuntimeError):
-            with pg:
-                raise RuntimeError("crash")
+        with pytest.raises(RuntimeError), pg:
+            raise RuntimeError("crash")
         backend.close.assert_called_once()
 
 
@@ -462,10 +474,12 @@ class TestCloseAndContextManager:
 # CRITICAL-001: _active_leases lock correctness
 # ---------------------------------------------------------------------------
 
+
 class TestActiveLeasesLock:
     def test_active_leases_lock_exists(self):
         pg, _ = _make_pglease()
         import threading
+
         assert isinstance(pg._active_leases_lock, type(threading.Lock()))
 
     def test_on_lost_removes_from_active_leases_under_lock(self):
@@ -478,6 +492,7 @@ class TestActiveLeasesLock:
             def __enter__(self):
                 acquired_lock_order.append("locked")
                 return original_lock.__enter__()
+
             def __exit__(self, *a):
                 acquired_lock_order.append("unlocked")
                 return original_lock.__exit__(*a)
@@ -506,6 +521,7 @@ class TestActiveLeasesLock:
 # HIGH-001: release() order (backend before heartbeat)
 # ---------------------------------------------------------------------------
 
+
 class TestReleaseOrder:
     def test_backend_release_called_before_heartbeat_stop(self):
         """HIGH-001: release() must call backend.release BEFORE heartbeat.stop."""
@@ -533,6 +549,7 @@ class TestReleaseOrder:
 # ---------------------------------------------------------------------------
 # MEDIUM-003: TTL validation
 # ---------------------------------------------------------------------------
+
 
 class TestTTLValidation:
     def test_try_acquire_rejects_zero_ttl(self):

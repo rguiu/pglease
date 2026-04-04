@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -24,6 +23,7 @@ pytestmark = pytest.mark.skipif(not POSTGRES_URL, reason="TEST_POSTGRES_URL not 
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _uid() -> str:
     return uuid.uuid4().hex[:8]
 
@@ -34,9 +34,8 @@ def backend():
     yield b
     # Clean up all bench/test rows
     try:
-        with b._connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {b.TABLE_NAME}")
+        with b._connection() as conn, conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {b.TABLE_NAME}")
     finally:
         b.close()
 
@@ -46,9 +45,8 @@ def pool_backend():
     b = PostgresBackend(POSTGRES_URL, pool_size=3)
     yield b
     try:
-        with b._connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {b.TABLE_NAME}")
+        with b._connection() as conn, conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {b.TABLE_NAME}")
     finally:
         b.close()
 
@@ -56,6 +54,7 @@ def pool_backend():
 # ---------------------------------------------------------------------------
 # list_leases
 # ---------------------------------------------------------------------------
+
 
 class TestListLeases:
     def test_empty_returns_empty_list(self, backend):
@@ -76,7 +75,7 @@ class TestListLeases:
         for t in tasks:
             backend.acquire(t, owner, ttl=60)
         leases = backend.list_leases()
-        names = [l.task_name for l in leases]
+        names = [lease.task_name for lease in leases]
         assert names == sorted(names)
 
     def test_returns_expired_rows_not_yet_cleaned(self, backend):
@@ -86,7 +85,7 @@ class TestListLeases:
         backend.acquire(task, owner, ttl=1)
         time.sleep(2)
         leases = backend.list_leases()
-        task_names = {l.task_name for l in leases}
+        task_names = {lease.task_name for lease in leases}
         assert task in task_names  # row still present (not cleaned up)
 
     def test_lease_fields_are_timezone_aware(self, backend):
@@ -103,6 +102,7 @@ class TestListLeases:
 # ---------------------------------------------------------------------------
 # cleanup_expired
 # ---------------------------------------------------------------------------
+
 
 class TestCleanupExpired:
     def test_returns_zero_when_nothing_expired(self, backend):
@@ -141,6 +141,7 @@ class TestCleanupExpired:
 # Connection pool (pool_size > 1)
 # ---------------------------------------------------------------------------
 
+
 class TestConnectionPool:
     def test_acquire_works_with_pool(self, pool_backend):
         task = "pool-" + _uid()
@@ -174,6 +175,7 @@ class TestConnectionPool:
     def test_concurrent_acquires_with_pool(self, pool_backend):
         """Multiple threads can acquire different leases without errors."""
         import threading
+
         results = []
         errors = []
 
@@ -200,6 +202,7 @@ class TestConnectionPool:
 # Error handling
 # ---------------------------------------------------------------------------
 
+
 class TestErrorHandling:
     def test_acquire_raises_backend_error_on_bad_connection(self):
         bad = PostgresBackend.__new__(PostgresBackend)
@@ -210,10 +213,18 @@ class TestErrorHandling:
         bad._conn = None
         bad._lock = __import__("threading").Lock()
         from psycopg2 import sql
+
         for attr in (
-            "_sql_create_table", "_sql_create_index", "_sql_select_for_update",
-            "_sql_insert", "_sql_update_renew", "_sql_update_takeover",
-            "_sql_delete", "_sql_heartbeat", "_sql_select", "_sql_list",
+            "_sql_create_table",
+            "_sql_create_index",
+            "_sql_select_for_update",
+            "_sql_insert",
+            "_sql_update_renew",
+            "_sql_update_takeover",
+            "_sql_delete",
+            "_sql_heartbeat",
+            "_sql_select",
+            "_sql_list",
             "_sql_cleanup_expired",
         ):
             setattr(bad, attr, sql.SQL("SELECT 1"))

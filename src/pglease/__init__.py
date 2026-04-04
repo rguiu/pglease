@@ -4,17 +4,17 @@ pglease - Distributed Task Coordination Library
 A lightweight coordination library for singleton task execution across distributed systems.
 """
 
-from .pglease import PGLease
 from .async_pglease import AsyncPGLease
+from .backends import HybridPostgresBackend, PostgresBackend
 from .exceptions import (
-    PgleaseError,
     AcquisitionError,
-    ReleaseError,
     BackendError,
     HeartbeatError,
+    PgleaseError,
+    ReleaseError,
 )
-from .models import Lease, AcquisitionResult
-from .backends import PostgresBackend, HybridPostgresBackend
+from .models import AcquisitionResult, Lease
+from .pglease import PGLease
 
 __version__ = "0.1.0"
 __all__ = [

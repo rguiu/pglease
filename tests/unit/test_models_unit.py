@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from pglease.models import AcquisitionResult, Lease
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _lease(
@@ -40,6 +40,7 @@ def _lease(
 # Lease — construction & __post_init__ normalisation
 # ---------------------------------------------------------------------------
 
+
 class TestLeaseConstruction:
     def test_basic_roundtrip(self):
         now = _now()
@@ -63,7 +64,7 @@ class TestLeaseConstruction:
             heartbeat_at=naive,
         )
         assert lease.acquired_at.tzinfo is not None
-        assert lease.acquired_at.tzinfo == timezone.utc
+        assert lease.acquired_at.tzinfo == UTC
 
     def test_naive_expires_at_normalised(self):
         naive = datetime(2024, 6, 1, 8, 0, 0)
@@ -74,7 +75,7 @@ class TestLeaseConstruction:
             expires_at=naive + timedelta(seconds=60),
             heartbeat_at=naive,
         )
-        assert lease.expires_at.tzinfo == timezone.utc
+        assert lease.expires_at.tzinfo == UTC
 
     def test_naive_heartbeat_at_normalised(self):
         naive = datetime(2024, 6, 1, 8, 0, 0)
@@ -85,7 +86,7 @@ class TestLeaseConstruction:
             expires_at=naive + timedelta(seconds=60),
             heartbeat_at=naive,
         )
-        assert lease.heartbeat_at.tzinfo == timezone.utc
+        assert lease.heartbeat_at.tzinfo == UTC
 
     def test_aware_datetimes_preserved(self):
         now = _now()
@@ -103,6 +104,7 @@ class TestLeaseConstruction:
 # Lease.is_expired
 # ---------------------------------------------------------------------------
 
+
 class TestLeaseIsExpired:
     def test_not_expired_future(self):
         now = _now()
@@ -112,7 +114,8 @@ class TestLeaseIsExpired:
     def test_expired_past(self):
         now = _now()
         lease = Lease(
-            task_name="t", owner_id="w",
+            task_name="t",
+            owner_id="w",
             acquired_at=now - timedelta(seconds=120),
             expires_at=now - timedelta(seconds=1),
             heartbeat_at=now - timedelta(seconds=120),
@@ -122,7 +125,8 @@ class TestLeaseIsExpired:
     def test_expires_exactly_now_is_expired(self):
         now = _now()
         lease = Lease(
-            task_name="t", owner_id="w",
+            task_name="t",
+            owner_id="w",
             acquired_at=now - timedelta(seconds=60),
             expires_at=now,
             heartbeat_at=now - timedelta(seconds=60),
@@ -139,6 +143,7 @@ class TestLeaseIsExpired:
 # Lease.time_remaining
 # ---------------------------------------------------------------------------
 
+
 class TestLeaseTimeRemaining:
     def test_positive_remaining(self):
         now = _now()
@@ -149,7 +154,8 @@ class TestLeaseTimeRemaining:
     def test_zero_when_expired(self):
         now = _now()
         lease = Lease(
-            task_name="t", owner_id="w",
+            task_name="t",
+            owner_id="w",
             acquired_at=now - timedelta(seconds=90),
             expires_at=now - timedelta(seconds=10),
             heartbeat_at=now - timedelta(seconds=90),
@@ -170,6 +176,7 @@ class TestLeaseTimeRemaining:
 # Lease.is_zombie
 # ---------------------------------------------------------------------------
 
+
 class TestLeaseIsZombie:
     def test_not_zombie_fresh_heartbeat(self):
         now = _now()
@@ -186,7 +193,8 @@ class TestLeaseIsZombie:
         # An expired lease is not a zombie — it's just expired
         now = _now()
         lease = Lease(
-            task_name="t", owner_id="w",
+            task_name="t",
+            owner_id="w",
             acquired_at=now - timedelta(seconds=120),
             expires_at=now - timedelta(seconds=10),  # already past
             heartbeat_at=now - timedelta(seconds=120),
@@ -225,6 +233,7 @@ class TestLeaseIsZombie:
 # ---------------------------------------------------------------------------
 # AcquisitionResult
 # ---------------------------------------------------------------------------
+
 
 class TestAcquisitionResult:
     def test_acquired(self):

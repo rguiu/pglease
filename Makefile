@@ -6,8 +6,8 @@ help:
 	@echo "install       Install development dependencies"
 	@echo "test          Run tests"
 	@echo "test-cov      Run tests with coverage report"
-	@echo "lint          Run linting checks"
-	@echo "format        Format code with black"
+	@echo "lint          Run linting (ruff check + ruff format --check)"
+	@echo "format        Format code with ruff format + ruff check --fix"
 	@echo "type-check    Run type checking with mypy"
 	@echo "clean         Remove build artifacts"
 	@echo "build         Build distribution packages"
@@ -24,10 +24,10 @@ test-cov:
 
 lint:
 	ruff check src/ tests/
-	black --check src/ tests/
+	ruff format --check src/ tests/
 
 format:
-	black src/ tests/
+	ruff format src/ tests/
 	ruff check --fix src/ tests/
 
 type-check:

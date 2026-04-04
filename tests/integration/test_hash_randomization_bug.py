@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import textwrap
+
 import pytest
 
 from pglease.backends.hybrid_postgres import HybridPostgresBackend
@@ -23,6 +24,7 @@ POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL")
 # ---------------------------------------------------------------------------
 # Unit-level: prove _task_to_lock_id is deterministic across processes
 # ---------------------------------------------------------------------------
+
 
 class TestHashDeterminism:
     """Verify lock IDs are identical across processes (no hash() randomisation)."""
@@ -84,6 +86,7 @@ class TestHashDeterminism:
 # Integration: prove two "pods" cannot hold the lock simultaneously (fix)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not POSTGRES_URL, reason="TEST_POSTGRES_URL not set")
 class TestAdvisoryLockMutualExclusionIntegration:
     """
@@ -119,10 +122,13 @@ class TestAdvisoryLockMutualExclusionIntegration:
 
         proc1 = subprocess.Popen(
             [sys.executable, "-c", code],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
         import time
+
         time.sleep(0.3)  # let proc1 acquire before proc2 starts
 
         code_no_hold = textwrap.dedent(f"""
@@ -141,7 +147,9 @@ class TestAdvisoryLockMutualExclusionIntegration:
 
         proc2 = subprocess.Popen(
             [sys.executable, "-c", code_no_hold],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
         out1, err1 = proc1.communicate()

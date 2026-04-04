@@ -33,9 +33,8 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
-    "black>=23.0.0",
+    "ruff>=0.9.0",  # linter + formatter (replaces black + isort + flake8)
     "mypy>=1.0.0",
-    "ruff>=0.0.270",
 ]
 
 [project.urls]
@@ -45,16 +44,40 @@ Repository = "https://github.com/yourusername/pglease"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.black]
-line-length = 100
-target-version = ['py37', 'py38', 'py39', 'py310', 'py311']
-
+# ---------------------------------------------------------------------------
+# Ruff — linter + formatter
+# Replaces: black, isort, flake8, pyupgrade
+# ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 100
-target-version = "py37"
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (undefined names, unused imports, …)
+    "I",    # isort (import ordering)
+    "UP",   # pyupgrade (modernise Python syntax)
+    "B",    # flake8-bugbear (likely bugs & design issues)
+    "SIM",  # flake8-simplify
+    "N",    # pep8-naming
+    "C4",   # flake8-comprehensions
+    "RET",  # flake8-return
+]
+ignore = [
+    "E501",    # line-too-long — enforced by the formatter instead
+    "B008",    # do-not-call-function-in-default-argument
+    "RET505",  # superfluous-else-return — style preference
+    "SIM108",  # ternary-instead-of-if-else — readability preference
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use assert statements and occasionally pytest.raises(Exception)
+"tests/**" = ["B017", "F811"]
 
 [tool.mypy]
-python_version = "3.7"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

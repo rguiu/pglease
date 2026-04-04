@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import threading
 import time
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
 
-import pytest
-
-from pglease.exceptions import HeartbeatError
 from pglease.heartbeat import HeartbeatManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_manager(interval: float = 0.05) -> tuple[HeartbeatManager, MagicMock]:
     backend = MagicMock()
@@ -37,6 +33,7 @@ def _wait_for_thread(mgr: HeartbeatManager, task: str, timeout: float = 2.0) -> 
 # ---------------------------------------------------------------------------
 # start / stop basics
 # ---------------------------------------------------------------------------
+
 
 class TestHeartbeatStartStop:
     def test_start_creates_thread(self):
@@ -90,6 +87,7 @@ class TestHeartbeatStartStop:
 # stop_all
 # ---------------------------------------------------------------------------
 
+
 class TestStopAll:
     def test_stop_all_clears_all_threads(self):
         mgr, _ = _make_manager()
@@ -108,6 +106,7 @@ class TestStopAll:
 # ---------------------------------------------------------------------------
 # _heartbeat_loop — successful heartbeats
 # ---------------------------------------------------------------------------
+
 
 class TestHeartbeatLoop:
     def test_sends_heartbeat_periodically(self):
@@ -128,6 +127,7 @@ class TestHeartbeatLoop:
 # ---------------------------------------------------------------------------
 # _heartbeat_loop — failure handling
 # ---------------------------------------------------------------------------
+
 
 class TestHeartbeatLoopFailure:
     def test_heartbeat_returns_false_triggers_on_lease_lost(self):
@@ -204,6 +204,7 @@ class TestHeartbeatLoopFailure:
 # MEDIUM-001: retry logic for transient errors
 # ---------------------------------------------------------------------------
 
+
 class TestHeartbeatRetryLogic:
     def test_transient_exception_retried_then_succeeds(self):
         """Two transient failures followed by success must NOT call on_lease_lost."""
@@ -254,6 +255,7 @@ class TestHeartbeatRetryLogic:
 # ---------------------------------------------------------------------------
 # HIGH-002: zombie thread tracking
 # ---------------------------------------------------------------------------
+
 
 class TestZombieThreads:
     def test_get_zombie_threads_empty_initially(self):

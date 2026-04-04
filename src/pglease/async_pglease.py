@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+from collections.abc import Callable
 from concurrent.futures import Executor
-from typing import Callable, List, Optional, Union
 
-from .backends.postgres import PostgresBackend
 from .exceptions import AcquisitionError
 from .models import Lease
 from .pglease import PGLease
@@ -46,11 +45,11 @@ class AsyncPGLease:
 
     def __init__(
         self,
-        backend: Union[PGLease, str],
-        owner_id: Optional[str] = None,
+        backend: PGLease | str,
+        owner_id: str | None = None,
         heartbeat_interval: int = 10,
-        on_lease_lost: Optional[Callable[[str], None]] = None,
-        executor: Optional[Executor] = None,
+        on_lease_lost: Callable[[str], None] | None = None,
+        executor: Executor | None = None,
     ):
         """
         Args:
@@ -102,7 +101,7 @@ class AsyncPGLease:
         task_name: str,
         ttl: int = 60,
         raise_on_failure: bool = False,
-    ) -> "AsyncLeaseContext":
+    ) -> AsyncLeaseContext:
         """Return an async context manager for the lease.
 
         Example::
@@ -121,11 +120,11 @@ class AsyncPGLease:
         """Release a previously acquired lease."""
         return await self._run(self._sync.release, task_name)
 
-    async def get_lease(self, task_name: str) -> Optional[Lease]:
+    async def get_lease(self, task_name: str) -> Lease | None:
         """Return the current :class:`Lease` for *task_name*, or ``None``."""
         return await self._run(self._sync.get_lease, task_name)
 
-    async def list_leases(self) -> List[Lease]:
+    async def list_leases(self) -> list[Lease]:
         """Return all leases in the store."""
         return await self._run(self._sync.list_leases)
 
@@ -137,7 +136,7 @@ class AsyncPGLease:
         self,
         task_name: str,
         ttl: int = 60,
-        timeout: Optional[float] = 60.0,
+        timeout: float | None = 60.0,
         poll_interval: float = 5.0,
     ) -> bool:
         """Block (asynchronously) until the lease is acquired or timeout.
@@ -151,9 +150,7 @@ class AsyncPGLease:
         """
         loop = asyncio.get_running_loop()
         if timeout == 0:
-            raise ValueError(
-                "timeout=0 is ambiguous; pass None or float('inf') to wait forever."
-            )
+            raise ValueError("timeout=0 is ambiguous; pass None or float('inf') to wait forever.")
         if timeout is None or timeout == float("inf"):
             deadline = float("inf")
         else:
@@ -164,9 +161,7 @@ class AsyncPGLease:
                 return True
             remaining = deadline - loop.time()
             if remaining <= 0:
-                raise AcquisitionError(
-                    f"Timed out waiting {timeout:.1f}s for lease {task_name!r}"
-                )
+                raise AcquisitionError(f"Timed out waiting {timeout:.1f}s for lease {task_name!r}")
             sleep_for = min(poll_interval, remaining)
             logger.debug(
                 f"Lease {task_name!r} not available; retrying in "
@@ -182,7 +177,7 @@ class AsyncPGLease:
     # Async context manager
     # ------------------------------------------------------------------
 
-    async def __aenter__(self) -> "AsyncPGLease":
+    async def __aenter__(self) -> AsyncPGLease:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -219,13 +214,9 @@ class AsyncLeaseContext:
         self.acquired = False
 
     async def __aenter__(self) -> bool:
-        self.acquired = await self.coordinator.try_acquire(
-            self.task_name, self.ttl
-        )
+        self.acquired = await self.coordinator.try_acquire(self.task_name, self.ttl)
         if not self.acquired and self.raise_on_failure:
-            raise AcquisitionError(
-                f"Failed to acquire lease for {self.task_name}"
-            )
+            raise AcquisitionError(f"Failed to acquire lease for {self.task_name}")
         return self.acquired
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
