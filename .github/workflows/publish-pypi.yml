@@ -1,11 +1,10 @@
 name: Publish to Production PyPI
 
 on:
-  # Manual trigger only - requires explicit confirmation
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to publish (e.g., v0.1.1)'
+        description: 'Version tag to publish (e.g., v0.2.0)'
         required: true
         type: string
       confirm:
@@ -17,53 +16,41 @@ jobs:
   publish:
     name: Publish to Production PyPI
     runs-on: ubuntu-latest
-    
+    permissions:
+      id-token: write  # required for Trusted Publisher (OIDC)
+
     steps:
       - name: Verify confirmation
         run: |
           if [ "${{ inputs.confirm }}" != "publish" ]; then
-            echo "❌ You must type 'publish' to confirm"
+            echo "You must type 'publish' to confirm"
             exit 1
           fi
-      
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.version }}
-      
+          fetch-depth: 0
+
       - name: Verify version tag exists
         run: |
           if ! git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
-            echo "❌ Tag ${{ inputs.version }} does not exist"
+            echo "Tag ${{ inputs.version }} does not exist"
             exit 1
           fi
-          echo "🚀 Publishing version ${{ inputs.version }} to PyPI"
-          twine upload dist/*
-      
-      - name: Create success comment
-        run: |
-          echo "✅ Successfully published ${{ inputs.version }} to PyPI"
-          echo "📦 View at: https://pypi.org/project/pglease/"
+          echo "Publishing version ${{ inputs.version }} to PyPI"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install build
+
       - name: Build package
         run: python -m build
-      
-      - name: Check distribution
-        run: twine check dist/*
-      
-      - name: Publish to Production PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          twine upload dist/*
-      
-      - name: Comment on release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.repos.createReleaseComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: context.payload.release.id,
-              body: '✅ Published to PyPI: https://pypi.org/project/pglease/'
-            })
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
