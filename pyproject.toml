@@ -56,8 +56,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/pglease"
-Repository = "https://github.com/yourusername/pglease"
+Homepage = "https://github.com/rguiu/pglease"
+Repository = "https://github.com/rguiu/pglease"
 
 [tool.setuptools.packages.find]
 where = ["src"]
